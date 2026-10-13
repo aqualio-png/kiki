@@ -67,6 +67,28 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Atkinson Hype
 #ed .chips button{min-height:38px;padding:6px 12px;font-size:14px}
 #ed .chips button[aria-pressed="true"]{background:var(--gold);color:#10164A;border-color:#10164A}
 #ed input[type=text]{flex:1 1 200px}
+#vs{position:fixed;inset:0;z-index:20;background:var(--bg);overflow:auto;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+#vs .ed-in{max-width:560px;margin:0 auto;padding:12px 16px 30px;display:grid;gap:12px}
+#vs .ed-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+#vs h2{font-family:"Bungee",Impact,"Arial Black",sans-serif;font-weight:400;font-size:22px;margin:0}
+#vs .hint{margin:0;font-size:14px;color:var(--soft)}
+#vs button{font:inherit;font-weight:700;border:2px solid var(--ink);background:var(--panel);color:var(--ink);border-radius:999px;padding:9px 16px;min-height:44px;cursor:pointer;touch-action:manipulation}
+#vs button:disabled{opacity:.4;cursor:not-allowed}
+#vs :focus-visible{outline:3px solid var(--pink);outline-offset:2px}
+#vs select{font:inherit;color:var(--ink);background:var(--panel);border:2px solid var(--line);border-radius:10px;padding:7px 9px;flex:1 1 180px}
+#vs label{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#vs .vs-card{background:var(--navy);color:#fff;border-radius:18px;padding:16px;display:grid;gap:8px;box-shadow:0 0 0 3px var(--gold)}
+#vs .vs-card .hint{color:#C9CEF7}
+#vs .vs-line{margin:0;font-family:"Bungee",Impact,"Arial Black",sans-serif;font-size:clamp(20px,5.6vw,28px);line-height:1.25;color:var(--gold)}
+#vs .vs-auto{color:rgba(255,255,255,.45)}
+#vs .vs-rec{min-height:120px !important;border-radius:28px !important;font-size:20px !important;background:var(--gold) !important;color:#10164A !important;border-color:#10164A !important;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;transition:box-shadow .08s linear}
+#vs .vs-rec.on{background:var(--pink) !important;color:#fff !important;border-color:var(--pink) !important}
+#vs .vs-msg{margin:0;min-height:1.5em;font-weight:700;text-align:center}
+#vs .vs-nav{justify-content:center}
+#vs .vs-dots{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+#vs .vs-dot{min-height:36px !important;min-width:36px;padding:4px 8px !important;font-size:14px}
+#vs .vs-dot.done{background:var(--gold);color:#10164A;border-color:#10164A}
+#vs .vs-dot.cur{outline:3px solid var(--pink);outline-offset:1px}
 </style>
 </head>
 <body>
@@ -94,23 +116,14 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Atkinson Hype
     <details open>
       <summary>Chanson</summary>
       <div class="opts">
+        <button id="micBtn" type="button" class="big">🎤 Mettre ma voix</button>
+        <p class="hint">Tu dis chaque ligne à ton rythme, sans musique ni casque. L'appli la recale toute seule sur le beat, change ta voix et fait chanter l'animal.</p>
         <label>Voix <select id="voiceSel" aria-label="Voix de la chanson">
           <option value="tts">Voix du téléphone</option>
-          <option value="mine" disabled>Ma voix enregistrée</option>
-          <option value="none">Aucune (instrumental)</option>
+          <option value="mine" disabled>Ma voix</option>
+          <option value="none">Sans voix</option>
         </select></label>
-        <label>Effet de voix <select id="fxSel" aria-label="Effet de voix">
-          <option value="grave">Grave rappeur</option>
-          <option value="tough">Gros dur</option>
-          <option value="natural">Naturelle</option>
-          <option value="chip">Petite voix</option>
-        </select></label>
-        <div class="row">
-          <button id="micBtn" type="button">🎤 Enregistrer ma voix</button>
-          <button id="wavBtn" type="button">Télécharger la chanson</button>
-        </div>
-        <label id="vShiftRow" hidden>Recaler ma voix <input id="vShift" type="range" min="-0.3" max="0.3" step="0.01" value="0"> <output id="vShiftOut">+0,00 s</output></label>
-        <p class="hint">Le beat, les aboiements et la foule sont générés à partir des paroles. La voix du téléphone rappe en direct, mais elle ne passe ni dans la vidéo ni dans le fichier. Pour une chanson complète, mets un casque, touche « Enregistrer ma voix » et rappe en suivant les paroles : ta voix est transformée et mixée avec le beat.</p>
+        <div class="row"><button id="wavBtn" type="button">Télécharger la chanson (WAV)</button></div>
       </div>
     </details>
 
@@ -197,6 +210,37 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Atkinson Hype
   </div>
 </div>
 
+<div id="vs" hidden role="dialog" aria-modal="true" aria-labelledby="vsTitle">
+  <div class="ed-in">
+    <div class="ed-head">
+      <h2 id="vsTitle">Mettre ma voix</h2>
+      <button id="vsClose" type="button">Fermer</button>
+    </div>
+    <p class="hint">Maintiens le gros bouton et dis la ligne d'un ton rythmé, puis relâche. Pas besoin de suivre la musique : l'appli cale tout.</p>
+    <div class="vs-card">
+      <p id="vsCount" class="hint"></p>
+      <p id="vsLine" class="vs-line"></p>
+      <p id="vsNote" class="hint"></p>
+    </div>
+    <button id="vsRec" type="button" class="vs-rec">🎤 Maintiens et dis la ligne</button>
+    <p id="vsMsg" class="vs-msg" aria-live="polite"></p>
+    <div class="row vs-nav">
+      <button id="vsPrev" type="button">◀ Précédente</button>
+      <button id="vsPlay" type="button">Écouter</button>
+      <button id="vsNext" type="button">Suivante ▶</button>
+    </div>
+    <div id="vsDots" class="vs-dots"></div>
+    <label>Effet de voix <select id="vsFx" aria-label="Effet de voix">
+      <option value="grave">Grave rappeur</option>
+      <option value="tough">Gros dur</option>
+      <option value="natural">Naturelle</option>
+      <option value="chip">Petite voix</option>
+    </select></label>
+    <button id="vsDone" type="button" class="big">Écouter ma chanson</button>
+    <button id="vsClear" type="button">Effacer toutes mes prises</button>
+  </div>
+</div>
+
 <script>
 "use strict";
 (function(){
@@ -274,11 +318,32 @@ var DB = null, memStore = {};
 function dbOpen(){
   return new Promise(function(res){
     try {
-      var rq = indexedDB.open("fais-danser", 1);
-      rq.onupgradeneeded = function(){ rq.result.createObjectStore("animals", { keyPath: "id" }); };
+      var rq = indexedDB.open("fais-danser", 2);
+      rq.onupgradeneeded = function(){
+        var db = rq.result;
+        if (!db.objectStoreNames.contains("animals")) db.createObjectStore("animals", { keyPath: "id" });
+        if (!db.objectStoreNames.contains("voice")) db.createObjectStore("voice", { keyPath: "k" });
+      };
       rq.onsuccess = function(){ DB = rq.result; res(DB); };
       rq.onerror = function(){ res(null); };
     } catch (e) { res(null); }
+  });
+}
+function voicePut(k, c){
+  if (!DB) return;
+  try { DB.transaction("voice", "readwrite").objectStore("voice").put({ k: k, sr: c.sr, data: c.data, v: c.v }); } catch (e) {}
+}
+function voiceClear(){
+  if (!DB) return;
+  try { DB.transaction("voice", "readwrite").objectStore("voice").clear(); } catch (e) {}
+}
+function voiceLoadAll(){
+  return new Promise(function(res){
+    if (!DB) { res([]); return; }
+    try {
+      var rq = DB.transaction("voice", "readonly").objectStore("voice").getAll();
+      rq.onsuccess = function(){ res(rq.result || []); }; rq.onerror = function(){ res([]); };
+    } catch (e) { res([]); }
   });
 }
 function dbAll(){
@@ -862,7 +927,7 @@ function startDemo(){
   demoBus = actx.createGain(); demoBus.gain.value = 0.85; demoBus.connect(master);
   demoT0 = actx.currentTime + 0.12;
   scheduleBeat(demoT0, demoBus);
-  if (voiceMode === "tts" && !VR) ttsSchedule();
+  if (voiceMode === "tts" && source === "gen") ttsSchedule();
   playing = true;
 }
 function stopDemo(){ if (demoBus) { try { demoBus.disconnect(); } catch (e) {} demoBus = null; } ttsStop(); }
@@ -912,15 +977,15 @@ function ttsStop(){
   if (hasTTS) { try { speechSynthesis.cancel(); } catch (e) {} }
 }
 
-/* ---------- Ma voix : enregistrement, effet, mixage ---------- */
-var VR = null, vocal = null, mixBlob = null, vocalShift = 0, mixing = false;
+/* ---------- Ma voix : une prise par ligne, recalée automatiquement ---------- */
+var clips = {}, mixing = false, mixDirty = true, source = "gen", mixBlob = null, fitCache = {};
 function stretchOLA(x, r){
   var N = 2048, Hs = 512, Ha = Hs / r, tol = 256, win = new Float32Array(N), i;
   for (i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
   var outLen = Math.ceil(x.length * r) + N, y = new Float32Array(outLen), ws = new Float32Array(outLen), prev = 0;
   for (var k = 0, out = 0; out + N < outLen; k++, out += Hs) {
     var ideal = Math.round(k * Ha);
-    if (ideal + N + tol >= x.length) break;
+    if (ideal + N >= x.length) break;
     var pos = ideal;
     if (k > 0) {
       var nat = prev + Hs, best = ideal, bc = -1e18;
@@ -939,16 +1004,47 @@ function stretchOLA(x, r){
   for (i = 0; i < outLen; i++) if (ws[i] > 1e-3) y[i] /= ws[i];
   return y.subarray(0, Math.round(x.length * r));
 }
-function pitchShift(x, f){
-  if (Math.abs(f - 1) < 0.01) return x;
-  var s = stretchOLA(x, f), n = Math.floor(s.length / f), y = new Float32Array(n);
+/* change la durée (facteur r) et la hauteur (facteur f) en une passe */
+function fitAudio(x, r, f){
+  var pad = new Float32Array(x.length + 4096); pad.set(x, 2048);
+  var s = stretchOLA(pad, r * f), n = Math.floor(s.length / f), y = new Float32Array(n);
   for (var i = 0; i < n; i++) { var p = i * f, j = Math.floor(p), fr = p - j; y[i] = (s[j] || 0) * (1 - fr) + (s[j + 1] || 0) * fr; }
+  var cut = Math.round(2048 * r), out = y.subarray(Math.min(cut, y.length), Math.max(cut, y.length - cut));
+  var fade = Math.min(400, Math.floor(out.length / 4));
+  for (i = 0; i < fade; i++) { out[i] *= i / fade; out[out.length - 1 - i] *= i / fade; }
+  return out;
+}
+function trimSilence(x, sr){
+  var fl = Math.round(sr * 0.01), nf = Math.floor(x.length / fl), rms = [], peak = 0, i, j;
+  for (i = 0; i < nf; i++) { var s = 0; for (j = 0; j < fl; j++) { var v = x[i * fl + j]; s += v * v; } var r = Math.sqrt(s / fl); rms.push(r); if (r > peak) peak = r; }
+  var th = Math.max(0.01, peak * 0.1), a = -1, b = -1;
+  for (i = 0; i < nf; i++) if (rms[i] > th) { if (a < 0) a = i; b = i; }
+  if (a < 0 || (b - a) < 20) return null;
+  a = Math.max(0, a - 4); b = Math.min(nf - 1, b + 6);
+  var y = x.slice(a * fl, (b + 1) * fl), g = peak > 0 ? Math.min(6, 0.3 / peak) : 1;
+  for (i = 0; i < y.length; i++) y[i] *= g;
   return y;
 }
-function vocalData(){
-  if (!vocal) return null;
-  if (!vocal.cache[fxMode]) vocal.cache[fxMode] = pitchShift(vocal.raw, (FX[fxMode] || FX.grave).pitch);
-  return vocal.cache[fxMode];
+function singText(l){
+  return l.words.filter(function(w){ return !w.crowd && !w.bark; }).map(function(w){ return w.text; }).join(" ").replace(/[«»…]/g, " ").replace(/\s+/g, " ").trim();
+}
+function singable(l){ return /[a-zA-Zà-üÀ-Ü]/.test(singText(l)); }
+function slotOf(i){
+  var l = lines[i], n = l.syls.length, d = spread(i), k0 = -1, k1 = -1;
+  l.syls.forEach(function(s, k){ if (!s.crowd && !s.bark) { if (k0 < 0) k0 = k; k1 = k + 1; } });
+  if (k0 < 0 || !n) return null;
+  return { t: l.t + d * k0 / n, dur: Math.max(0.3, d * (k1 - k0) / n) };
+}
+function hasClips(){ return lines.some(function(l){ return !!clips[singText(l)]; }); }
+function fitClip(i){
+  var l = lines[i], c = clips[singText(l)], sl = slotOf(i);
+  if (!c || !sl) return null;
+  var key = singText(l) + "|" + fxMode + "|" + sl.dur.toFixed(3) + "|" + c.v;
+  if (fitCache[key]) return fitCache[key];
+  var r = clamp(sl.dur / (c.data.length / c.sr), 0.55, 1.7);
+  var out = { data: fitAudio(c.data, r, (FX[fxMode] || FX.grave).pitch), sr: c.sr };
+  fitCache[key] = out;
+  return out;
 }
 function renderSong(withVocal){
   return new Promise(function(res, rej){
@@ -961,25 +1057,25 @@ function renderSong(withVocal){
       var comp = off.createDynamicsCompressor(); comp.threshold.value = -12; comp.ratio.value = 3;
       bus.connect(comp); comp.connect(off.destination);
       scheduleBeat(0, bus);
-      var data = withVocal ? vocalData() : null;
-      if (data) {
-        var buf = off.createBuffer(1, data.length, vocal.sr); buf.getChannelData(0).set(data);
-        var s = off.createBufferSource(); s.buffer = buf;
-        var hp = filt("highpass", 90), vc = off.createDynamicsCompressor();
-        vc.threshold.value = -26; vc.ratio.value = 4; vc.attack.value = 0.005; vc.release.value = 0.15;
-        var vg = off.createGain(); vg.gain.value = 1.7;
-        s.connect(hp); hp.connect(vc);
+      if (withVocal) {
+        var hp = filt("highpass", 90), vc = off.createDynamicsCompressor(), vg = off.createGain();
+        vc.threshold.value = -26; vc.ratio.value = 4; vc.attack.value = 0.005; vc.release.value = 0.15; vg.gain.value = 1.6;
+        hp.connect(vc);
         if (fxMode === "tough") {
           var sh = off.createWaveShaper(), cv2 = new Float32Array(1024);
-          for (var i = 0; i < 1024; i++) { var xx = i / 511.5 - 1; cv2[i] = Math.tanh(2.5 * xx) / Math.tanh(2.5); }
+          for (var q = 0; q < 1024; q++) { var xx = q / 511.5 - 1; cv2[q] = Math.tanh(2.5 * xx) / Math.tanh(2.5); }
           sh.curve = cv2; vc.connect(sh); sh.connect(vg);
         } else vc.connect(vg);
         vg.connect(bus);
         var dl = off.createDelay(1), fb = off.createGain(), dg = off.createGain();
-        dl.delayTime.value = beatLen() / 2; fb.gain.value = 0.25; dg.gain.value = 0.15;
+        dl.delayTime.value = beatLen() / 2; fb.gain.value = 0.22; dg.gain.value = 0.13;
         vg.connect(dl); dl.connect(fb); fb.connect(dl); dl.connect(dg); dg.connect(bus);
-        var at = vocal.offset + vocalShift;
-        if (at >= 0) s.start(at); else s.start(0, -at);
+        lines.forEach(function(l, i){
+          var fc = fitClip(i), sl = slotOf(i);
+          if (!fc || !sl || !fc.data.length) return;
+          var buf = off.createBuffer(1, fc.data.length, fc.sr); buf.getChannelData(0).set(fc.data);
+          var s = off.createBufferSource(); s.buffer = buf; s.connect(hp); s.start(Math.max(0, sl.t));
+        });
       }
       SC = prevSC; noiseBuf = prevNoise;
       var done = false;
@@ -1012,47 +1108,176 @@ function useMix(blob){
   applyTimes(); updateUI();
 }
 function remix(){
-  if (!vocal) return;
   mixing = true; updateUI();
-  setTimeout(function(){
-    renderSong(true).then(function(b){ mixing = false; useMix(toWav(b)); srcLine.textContent = "Ta chanson est prête : touche Lancer."; })
-      .catch(function(){ mixing = false; updateUI(); srcLine.textContent = "Le mixage a échoué sur ce navigateur."; });
-  }, 30);
+  return new Promise(function(res, rej){
+    setTimeout(function(){
+      renderSong(true).then(function(b){ mixing = false; mixDirty = false; useMix(toWav(b)); res(); })
+        .catch(function(e){ mixing = false; updateUI(); srcLine.textContent = "Le mixage a échoué sur ce navigateur."; rej(e); });
+    }, 30);
+  });
 }
-function startVoiceRec(){
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { srcLine.textContent = "Ce navigateur ne donne pas accès au micro (la page doit être en https)."; return; }
+function wantsMine(){ return source === "gen" && voiceMode === "mine" && hasClips(); }
+function prepareAndPlay(fromStart){
+  if (source === "gen") {
+    if (wantsMine()) {
+      if (mixDirty || fileKey !== "mix") return remix().then(function(){ return play(true); });
+      return play(fromStart);
+    }
+    if (mode !== "demo") { if (playing) pause(); mode = "demo"; fileKey = ""; applyTimes(); }
+    return play(true);
+  }
+  return play(fromStart);
+}
+
+/* ---------- Studio voix ---------- */
+var VS = { open: false, idx: 0, list: [], recOn: false, recBuf: [], holdT: 0, tapMode: false, lvl: 0 };
+var mic = null;
+var vsEl = $("vs"), vsLine = $("vsLine"), vsCount = $("vsCount"), vsNote = $("vsNote"), vsRec = $("vsRec"), vsDots = $("vsDots"), vsMsg = $("vsMsg");
+function micOpen(){
+  if (mic) return Promise.resolve(mic);
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return Promise.reject(new Error("nomic"));
   ensureAudio();
-  if (actx.resume) actx.resume();
-  navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(function(stream){
-    if (playing) pause();
-    if (mode === "audio") { mode = "demo"; applyTimes(); }
-    var src = actx.createMediaStreamSource(stream), proc = actx.createScriptProcessor(4096, 1, 1), z = actx.createGain();
+  return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(function(stream){
+    var src = actx.createMediaStreamSource(stream), proc = actx.createScriptProcessor(2048, 1, 1), z = actx.createGain();
     z.gain.value = 0;
-    VR = { stream: stream, src: src, proc: proc, z: z, chunks: [], t0: null, sr: actx.sampleRate };
     proc.onaudioprocess = function(e){
-      if (!VR) return;
-      if (VR.t0 === null) { var pt = (typeof e.playbackTime === "number" && e.playbackTime > 0) ? e.playbackTime : actx.currentTime; VR.t0 = pt - e.inputBuffer.duration; }
-      VR.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      var d = e.inputBuffer.getChannelData(0), s = 0;
+      for (var i = 0; i < d.length; i += 4) s += d[i] * d[i];
+      VS.lvl = Math.min(1, Math.sqrt(s / (d.length / 4)) * 6);
+      if (VS.recOn) VS.recBuf.push(new Float32Array(d));
     };
     src.connect(proc); proc.connect(z); z.connect(actx.destination);
-    play(true).then(function(){ updateUI(); srcLine.textContent = "Enregistrement : rappe en suivant les paroles en bas de l'écran."; });
-  }).catch(function(){ srcLine.textContent = "Accès au micro refusé. Autorise le micro pour cette page et réessaie."; });
+    mic = { stream: stream, src: src, proc: proc, z: z, sr: actx.sampleRate };
+    return mic;
+  });
 }
-function finishVoiceRec(){
-  if (!VR) return;
-  var R = VR; VR = null;
-  try { R.src.disconnect(); R.proc.disconnect(); R.z.disconnect(); } catch (e) {}
-  R.stream.getTracks().forEach(function(t){ t.stop(); });
-  var total = 0; R.chunks.forEach(function(c){ total += c.length; });
-  if (total < R.sr) { srcLine.textContent = "Enregistrement trop court."; updateUI(); return; }
-  var raw = new Float32Array(total), o = 0;
-  R.chunks.forEach(function(c){ raw.set(c, o); o += c.length; });
-  var lat = (actx.outputLatency || 0) + (actx.baseLatency || 0);
-  vocal = { raw: raw, sr: R.sr, offset: (R.t0 - demoT0) - lat, cache: {} };
+function micClose(){
+  if (!mic) return;
+  try { mic.src.disconnect(); mic.proc.disconnect(); mic.z.disconnect(); } catch (e) {}
+  mic.stream.getTracks().forEach(function(t){ t.stop(); });
+  mic = null;
+}
+function vsOpen(){
+  if (playing) pause();
+  ensureAudio(); if (actx.resume) actx.resume();
+  demoTimes();
+  VS.list = []; lines.forEach(function(l, i){ if (singable(l)) VS.list.push(i); });
+  if (!VS.list.length) { srcLine.textContent = "Aucune ligne à chanter dans les paroles."; return; }
+  VS.idx = 0;
+  for (var k = 0; k < VS.list.length; k++) { if (!clips[singText(lines[VS.list[k]])]) { VS.idx = k; break; } }
+  VS.open = true; vsEl.hidden = false; document.body.style.overflow = "hidden";
+  vsMsg.textContent = "Autorise le micro si le téléphone le demande.";
+  micOpen().then(function(){ vsMsg.textContent = ""; vsRender(); }).catch(function(){
+    vsMsg.textContent = "Micro inaccessible : autorise-le pour cette page (elle doit être ouverte en https).";
+  });
+  vsRender();
+}
+function vsClose(){
+  vsStopRec(true);
+  VS.open = false; vsEl.hidden = true; document.body.style.overflow = "";
+  micClose(); updateUI();
+}
+function vsRender(){
+  var i = VS.list[VS.idx], l = lines[i];
+  vsCount.textContent = "Ligne " + (VS.idx + 1) + " sur " + VS.list.length + " (" + ({ intro: "intro", couplet: "couplet", refrain: "refrain", outro: "outro" }[l.section]) + ")";
+  vsLine.textContent = "";
+  var extra = false;
+  l.words.forEach(function(w, k){
+    var sp = document.createElement("span"); sp.textContent = (k ? " " : "") + w.text;
+    if (w.crowd || w.bark) { sp.className = "vs-auto"; extra = true; }
+    vsLine.appendChild(sp);
+  });
+  vsNote.textContent = extra ? "Les mots en gris (aboiements, foule) sont ajoutés tout seuls : ne les dis pas." : "";
+  vsDots.innerHTML = "";
+  VS.list.forEach(function(li, k){
+    var b = document.createElement("button"); b.type = "button";
+    b.className = "vs-dot" + (clips[singText(lines[li])] ? " done" : "") + (k === VS.idx ? " cur" : "");
+    b.setAttribute("aria-label", "Ligne " + (k + 1) + (clips[singText(lines[li])] ? ", enregistrée" : ""));
+    b.textContent = String(k + 1);
+    b.addEventListener("click", function(){ if (!VS.recOn) { VS.idx = k; vsRender(); } });
+    vsDots.appendChild(b);
+  });
+  var has = !!clips[singText(l)];
+  $("vsPlay").disabled = !has || VS.recOn;
+  $("vsPrev").disabled = VS.idx === 0 || VS.recOn;
+  $("vsNext").disabled = VS.idx >= VS.list.length - 1 || VS.recOn;
+  var nDone = VS.list.filter(function(li){ return !!clips[singText(lines[li])]; }).length;
+  $("vsDone").disabled = !nDone || VS.recOn;
+  $("vsDone").textContent = nDone === VS.list.length ? "Écouter ma chanson" : "Écouter ma chanson (" + nDone + "/" + VS.list.length + " lignes)";
+  vsRec.classList.toggle("on", VS.recOn);
+  vsRec.textContent = VS.recOn ? (VS.tapMode ? "● Touche pour arrêter" : "● Relâche pour arrêter") : (has ? "🎤 Refaire cette ligne" : "🎤 Maintiens et dis la ligne");
+}
+function vsStartRec(){
+  if (!mic || VS.recOn) return;
+  VS.recBuf = []; VS.recOn = true; VS.holdT = performance.now(); VS.tapMode = false;
+  vsMsg.textContent = ""; vsRender();
+}
+function vsStopRec(discard){
+  if (!VS.recOn) return;
+  VS.recOn = false;
+  var bufs = VS.recBuf; VS.recBuf = [];
+  if (discard) { vsRender(); return; }
+  var total = 0; bufs.forEach(function(b){ total += b.length; });
+  var raw = new Float32Array(total), o = 0; bufs.forEach(function(b){ raw.set(b, o); o += b.length; });
+  var t = trimSilence(raw, mic.sr);
+  if (!t) { vsMsg.textContent = "Je n'ai rien entendu : parle plus près du micro et réessaie."; vsRender(); return; }
+  var l = lines[VS.list[VS.idx]], key = singText(l);
+  clips[key] = { data: t, sr: mic.sr, v: Date.now() };
+  mixDirty = true;
+  voicePut(key, clips[key]);
   voiceSel.querySelector('option[value="mine"]').disabled = false;
-  voiceSel.value = "mine"; voiceMode = "mine";
-  updateUI();
-  remix();
+  vsMsg.textContent = "Ligne enregistrée.";
+  if (VS.idx < VS.list.length - 1) VS.idx++;
+  vsRender();
+}
+vsRec.addEventListener("pointerdown", function(e){
+  e.preventDefault();
+  if (VS.recOn) { if (VS.tapMode) vsStopRec(false); return; }
+  if (!mic) { vsMsg.textContent = "Le micro n'est pas encore prêt."; micOpen().then(function(){ vsMsg.textContent = ""; }).catch(function(){}); return; }
+  vsStartRec();
+  try { vsRec.setPointerCapture(e.pointerId); } catch (er) {}
+});
+function vsRelease(){
+  if (!VS.recOn || VS.tapMode) return;
+  if (performance.now() - VS.holdT < 350) { VS.tapMode = true; vsRender(); return; }
+  vsStopRec(false);
+}
+vsRec.addEventListener("pointerup", vsRelease);
+vsRec.addEventListener("pointercancel", vsRelease);
+vsRec.addEventListener("keydown", function(e){
+  if (e.key !== " " && e.key !== "Enter") return;
+  e.preventDefault();
+  if (VS.recOn) vsStopRec(false); else { vsStartRec(); VS.tapMode = true; vsRender(); }
+});
+$("vsPrev").addEventListener("click", function(){ if (VS.idx > 0) { VS.idx--; vsMsg.textContent = ""; vsRender(); } });
+$("vsNext").addEventListener("click", function(){ if (VS.idx < VS.list.length - 1) { VS.idx++; vsMsg.textContent = ""; vsRender(); } });
+$("vsPlay").addEventListener("click", function(){
+  var fc = fitClip(VS.list[VS.idx]);
+  if (!fc) return;
+  ensureAudio(); if (actx.resume) actx.resume();
+  var b = actx.createBuffer(1, fc.data.length, fc.sr); b.getChannelData(0).set(fc.data);
+  var s = actx.createBufferSource(); s.buffer = b; s.connect(master); s.start();
+});
+$("vsFx").addEventListener("change", function(){ fxMode = $("vsFx").value; sset("fd.fx", fxMode); mixDirty = true; });
+$("vsClose").addEventListener("click", vsClose);
+$("vsDone").addEventListener("click", function(){
+  vsClose();
+  source = "gen"; voiceMode = "mine"; voiceSel.value = "mine"; sset("fd.voice", "mine");
+  ttsUnlock();
+  prepareAndPlay(true);
+});
+$("vsClear").addEventListener("click", function(){
+  if (!window.confirm("Effacer toutes tes prises de voix ?")) return;
+  clips = {}; fitCache = {}; mixDirty = true; voiceClear();
+  voiceSel.querySelector('option[value="mine"]').disabled = true;
+  if (voiceMode === "mine") { voiceMode = hasTTS ? "tts" : "none"; voiceSel.value = voiceMode; }
+  VS.idx = 0; vsMsg.textContent = "Prises effacées."; vsRender();
+});
+function vsTick(){
+  if (VS.open) {
+    var lv = VS.recOn ? VS.lvl : VS.lvl * 0.4;
+    vsRec.style.boxShadow = "0 0 0 " + Math.round(4 + lv * 22) + "px " + (VS.recOn ? "rgba(232,51,111,0.35)" : "rgba(255,212,0,0.35)");
+  }
 }
 
 
@@ -1202,6 +1427,7 @@ function frame(){
   var nowMs = performance.now(), dt = Math.min(0.1, (nowMs - lastNow) / 1000);
   lastNow = nowMs;
   if (ED.open) { edFrame(dt); requestAnimationFrame(frame); return; }
+  if (VS.open) { vsTick(); requestAnimationFrame(frame); return; }
   var tA = 0, tL = 0;
   if (playing) {
     if (mode === "demo" && actx) {
@@ -1225,23 +1451,23 @@ function frame(){
 /* ================= Commandes lecture ================= */
 function setStatus(){
   if (syncing) { srcLine.textContent = "Calage en cours : touche « Maintenant ! » au début de chaque ligne."; return; }
-  if (mixing) { srcLine.textContent = "Mixage de ta voix avec le beat…"; return; }
-  if (VR) { srcLine.textContent = "Enregistrement : rappe en suivant les paroles en bas de l'écran."; return; }
-  if (mode === "audio" && fileKey === "mix") { srcLine.textContent = "Ta chanson (ta voix + le beat) est chargée, paroles calées automatiquement."; return; }
-  if (mode === "demo") srcLine.textContent = "Beat intégré à " + bpm + " BPM" + (voiceMode === "tts" ? (hasTTS ? ", voix du téléphone." : " (pas de voix de synthèse sur ce navigateur).") : ", sans voix.");
+  if (mixing) { srcLine.textContent = "Mixage de ta voix avec la musique…"; return; }
+  if (source === "gen") {
+    if (wantsMine()) srcLine.textContent = "Chanson générée avec ta voix.";
+    else srcLine.textContent = "Chanson générée à " + bpm + " BPM" + (voiceMode === "tts" ? (hasTTS ? ", voix du téléphone." : " (pas de voix de synthèse sur ce navigateur).") : ", sans voix.");
+    return;
+  }
   else if (audioTimes && audioTimes.length === lines.length) srcLine.textContent = "« " + fileName + " » chargée, paroles calées.";
   else srcLine.textContent = "« " + fileName + " » chargée. Cale les paroles une fois pour que l'animal chante au bon moment.";
 }
 function updateUI(){
   playBtn.textContent = playing ? (mode === "demo" ? "■ Stop" : "❚❚ Pause") : "▶ Lancer";
-  demoBtn.hidden = mode === "demo";
-  syncBtn.hidden = mode !== "audio";
+  demoBtn.hidden = source === "gen";
+  syncBtn.hidden = source !== "file";
   syncBtn.disabled = syncing; playBtn.disabled = syncing; restartBtn.disabled = syncing;
   recBtn.hidden = !canRecord;
-  micBtn.textContent = VR ? "■ Arrêter l'enregistrement de ma voix" : "🎤 Enregistrer ma voix";
   micBtn.disabled = syncing || !!rec || mixing;
-  playBtn.disabled = syncing || mixing; wavBtn.disabled = mixing || !!VR;
-  vShiftRow.hidden = !vocal;
+  playBtn.disabled = syncing || mixing; restartBtn.disabled = syncing || mixing; wavBtn.disabled = mixing;
   recBtn.textContent = rec ? "■ Arrêter l'enregistrement" : "● Enregistrer la vidéo";
   recBtn.disabled = syncing;
   setStatus();
@@ -1266,15 +1492,14 @@ function pause(){
 }
 function onEnded(){
   playing = false;
-  if (VR) finishVoiceRec();
   if (syncing) finishSync();
   if (rec) setTimeout(stopRecording, 500);
   updateUI();
 }
 audio.addEventListener("ended", function(){ onEnded(); });
 audio.addEventListener("pause", function(){ if (mode === "audio" && playing && !audio.ended) { playing = false; updateUI(); } });
-playBtn.addEventListener("click", function(){ if (playing) { pause(); if (VR) finishVoiceRec(); } else { ttsUnlock(); play(mode === "demo"); } });
-restartBtn.addEventListener("click", function(){ ttsUnlock(); play(true); });
+playBtn.addEventListener("click", function(){ if (playing) pause(); else { ttsUnlock(); prepareAndPlay(false); } });
+restartBtn.addEventListener("click", function(){ ttsUnlock(); prepareAndPlay(true); });
 loadBtn.addEventListener("click", function(){ fileIn.click(); });
 fileIn.addEventListener("change", function(){
   var f = fileIn.files && fileIn.files[0];
@@ -1282,11 +1507,11 @@ fileIn.addEventListener("change", function(){
   if (playing) pause();
   try { if (audio.src && audio.src.indexOf("blob:") === 0) URL.revokeObjectURL(audio.src); } catch (e) {}
   audio.src = URL.createObjectURL(f); audio.load();
-  mode = "audio"; fileKey = f.name + "|" + f.size; fileName = f.name; audioTimes = null;
+  mode = "audio"; source = "file"; fileKey = f.name + "|" + f.size; fileName = f.name; audioTimes = null;
   try { var o = JSON.parse(sget("fd.t." + fileKey) || "null"); if (o && o.t && o.t.length) audioTimes = o.t; } catch (e) {}
   applyTimes(); fileIn.value = ""; updateUI();
 });
-demoBtn.addEventListener("click", function(){ if (playing) pause(); mode = "demo"; fileKey = ""; if (voiceMode === "mine") { voiceMode = "tts"; voiceSel.value = hasTTS ? "tts" : "none"; voiceMode = voiceSel.value; } applyTimes(); updateUI(); });
+demoBtn.addEventListener("click", function(){ if (playing) pause(); source = "gen"; mode = "demo"; fileKey = ""; applyTimes(); updateUI(); });
 
 function showSync(){
   var l = lines[syncIdx];
@@ -1329,40 +1554,38 @@ document.addEventListener("keydown", function(e){
 });
 
 var lyrTimer = null;
-function rebuildLyrics(){ lines = parseLyrics(lyr.value); applyTimes(); sset("fd.lyrics", lyr.value); updateUI(); }
+function rebuildLyrics(){ mixDirty = true; lines = parseLyrics(lyr.value); applyTimes(); sset("fd.lyrics", lyr.value); updateUI(); }
 lyr.addEventListener("input", function(){ clearTimeout(lyrTimer); lyrTimer = setTimeout(rebuildLyrics, 400); });
 resetLyr.addEventListener("click", function(){ lyr.value = DEFAULT_LYRICS; rebuildLyrics(); });
 bpmIn.addEventListener("change", function(){
   bpm = clamp(Math.round(+bpmIn.value || 100), 60, 180); bpmIn.value = bpm;
-  sset("fd.bpm", String(bpm)); applyTimes(); updateUI();
+  sset("fd.bpm", String(bpm)); mixDirty = true; applyTimes(); updateUI();
 });
 function showOff(){ offOut.textContent = (lyrOff >= 0 ? "+" : "") + lyrOff.toFixed(2).replace(".", ",") + " s"; }
 offIn.addEventListener("input", function(){ lyrOff = +offIn.value || 0; sset("fd.off", String(lyrOff)); showOff(); });
 
 /* Chanson */
-var voiceSel = $("voiceSel"), fxSel = $("fxSel"), micBtn = $("micBtn"), wavBtn = $("wavBtn"), vShift = $("vShift"), vShiftOut = $("vShiftOut"), vShiftRow = $("vShiftRow");
+var voiceSel = $("voiceSel"), micBtn = $("micBtn"), wavBtn = $("wavBtn");
 if (!hasTTS) { voiceSel.querySelector('option[value="tts"]').disabled = true; }
 voiceSel.addEventListener("change", function(){
-  voiceMode = voiceSel.value; if (voiceMode !== "mine") sset("fd.voice", voiceMode);
-  if (voiceMode === "mine") { if (vocal) remix(); }
-  else if (fileKey === "mix") { if (playing) pause(); mode = "demo"; fileKey = ""; applyTimes(); }
+  if (playing) pause();
+  voiceMode = voiceSel.value; sset("fd.voice", voiceMode); source = "gen";
+  if (!wantsMine() && mode !== "demo") { mode = "demo"; fileKey = ""; applyTimes(); }
   updateUI();
 });
-fxSel.addEventListener("change", function(){ fxMode = fxSel.value; sset("fd.fx", fxMode); if (voiceMode === "mine" && vocal) remix(); });
-micBtn.addEventListener("click", function(){ if (VR) { pause(); finishVoiceRec(); } else startVoiceRec(); });
-vShift.addEventListener("input", function(){ vocalShift = +vShift.value || 0; vShiftOut.textContent = (vocalShift >= 0 ? "+" : "") + vocalShift.toFixed(2).replace(".", ",") + " s"; });
-vShift.addEventListener("change", function(){ if (voiceMode === "mine" && vocal) remix(); });
+micBtn.addEventListener("click", vsOpen);
 wavBtn.addEventListener("click", function(){
-  var withV = voiceMode === "mine" && !!vocal;
+  var withV = wantsMine();
   srcLine.textContent = "Fabrication du fichier audio…";
   setTimeout(function(){
     renderSong(withV).then(function(b){
-      var blob = toWav(b), name = slug(curAnimal.name) + "-chanson.wav", times = [];
-      var keep = lines.map(function(l){ return l.t; }); demoTimes(); times = lines.map(function(l){ return Math.round(l.t * 1000) / 1000; });
+      var blob = toWav(b), name = slug(curAnimal.name) + "-chanson.wav";
+      var keep = lines.map(function(l){ return l.t; }); demoTimes();
+      var times = lines.map(function(l){ return Math.round(l.t * 1000) / 1000; });
       lines.forEach(function(l, i){ l.t = keep[i]; });
       sset("fd.t." + name + "|" + blob.size, JSON.stringify({ t: times }));
       saveBlob(blob, name);
-      srcLine.textContent = withV ? "Chanson téléchargée (ta voix + le beat)." : "Instrumental téléchargé (la voix du téléphone ne peut pas être enregistrée dans le fichier).";
+      srcLine.textContent = withV ? "Chanson téléchargée (ta voix + la musique)." : "Musique téléchargée sans voix (la voix du téléphone ne peut pas être mise dans un fichier).";
     }).catch(function(){ srcLine.textContent = "La fabrication du fichier a échoué sur ce navigateur."; });
   }, 30);
 });
@@ -1408,7 +1631,7 @@ function startRecording(){
     saveBlob(blob, slug(curAnimal.name) + "-danse." + ext);
     srcLine.textContent = "Vidéo prête : vérifie tes téléchargements.";
   };
-  play(true).then(function(){ if (rec && rec.state === "inactive") rec.start(250); updateUI(); });
+  prepareAndPlay(true).then(function(){ if (rec && rec.state === "inactive") rec.start(250); updateUI(); });
 }
 function stopRecording(){ if (rec && rec.state !== "inactive") rec.stop(); if (playing) pause(); }
 recBtn.addEventListener("click", function(){ if (rec) stopRecording(); else startRecording(); });
@@ -1760,12 +1983,23 @@ try { var mvs = JSON.parse(sget("fd.moves") || "null"); if (mvs) Object.keys(mov
 Object.keys(mvSel).forEach(function(k){ mvSel[k].value = moveFor[k]; });
 var si = parseFloat(sget("fd.int") || ""); if (isFinite(si)) { intensity = clamp(si, 0.4, 1.6); intensityIn.value = intensity; }
 var so = parseFloat(sget("fd.soft") || ""); if (isFinite(so)) { softness = clamp(so, 0, 1); softnessIn.value = softness; }
-var sv = sget("fd.voice"); if (sv === "tts" || sv === "none") { voiceMode = sv; voiceSel.value = sv; }
-if (voiceMode === "tts" && !hasTTS) { voiceMode = "none"; voiceSel.value = "none"; }
-var sf = sget("fd.fx"); if (FX[sf]) { fxMode = sf; fxSel.value = sf; }
+var sv = sget("fd.voice"); if (sv === "tts" || sv === "none" || sv === "mine") voiceMode = sv;
+if (voiceMode === "tts" && !hasTTS) voiceMode = "none";
+var sf = sget("fd.fx"); if (FX[sf]) fxMode = sf;
+$("vsFx").value = fxMode;
 lines = parseLyrics(lyr.value); applyTimes(); updateUI();
 if (document.fonts && document.fonts.load) { try { document.fonts.load("400 40px Bungee"); document.fonts.load("700 20px \"Atkinson Hyperlegible\""); } catch (e) {} }
-dbOpen().then(function(){ return refreshLibrary(); });
+dbOpen().then(function(){
+  voiceLoadAll().then(function(list){
+    list.forEach(function(c){ if (c && c.k && c.data) clips[c.k] = { data: c.data instanceof Float32Array ? c.data : new Float32Array(c.data), sr: c.sr, v: c.v || 1 }; });
+    var any = Object.keys(clips).length > 0;
+    voiceSel.querySelector('option[value="mine"]').disabled = !any;
+    if (voiceMode === "mine" && !any) voiceMode = hasTTS ? "tts" : "none";
+    voiceSel.value = voiceMode;
+    updateUI();
+  });
+  return refreshLibrary();
+});
 requestAnimationFrame(frame);
 })();
 </script>
