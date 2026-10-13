@@ -123,7 +123,11 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Atkinson Hype
           <option value="mine" disabled>Ma voix</option>
           <option value="none">Sans voix</option>
         </select></label>
-        <div class="row"><button id="wavBtn" type="button">Télécharger la chanson (WAV)</button></div>
+        <label>Style de voix <select id="fxMain" aria-label="Style de voix"></select></label>
+        <div class="row">
+          <button id="fxTry" type="button">▶ Essayer le style</button>
+          <button id="wavBtn" type="button">Télécharger la chanson (WAV)</button>
+        </div>
       </div>
     </details>
 
@@ -222,6 +226,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Atkinson Hype
       <p id="vsLine" class="vs-line"></p>
       <p id="vsNote" class="hint"></p>
     </div>
+    <label>Style de voix <select id="vsFx" aria-label="Style de voix"></select></label>
     <button id="vsRec" type="button" class="vs-rec">🎤 Maintiens et dis la ligne</button>
     <p id="vsMsg" class="vs-msg" aria-live="polite"></p>
     <div class="row vs-nav">
@@ -230,12 +235,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Atkinson Hype
       <button id="vsNext" type="button">Suivante ▶</button>
     </div>
     <div id="vsDots" class="vs-dots"></div>
-    <label>Effet de voix <select id="vsFx" aria-label="Effet de voix">
-      <option value="grave">Grave rappeur</option>
-      <option value="tough">Gros dur</option>
-      <option value="natural">Naturelle</option>
-      <option value="chip">Petite voix</option>
-    </select></label>
     <button id="vsDone" type="button" class="big">Écouter ma chanson</button>
     <button id="vsClear" type="button">Effacer toutes mes prises</button>
   </div>
@@ -934,8 +933,66 @@ function stopDemo(){ if (demoBus) { try { demoBus.disconnect(); } catch (e) {} d
 function demoEnd(){ return finalTime() + 2.6; }
 
 /* ---------- Voix du téléphone (synthèse vocale) ---------- */
-var voiceMode = "tts", fxMode = "grave", ttsTimers = [], ttsVoice = null;
-var FX = { grave: { pitch: 0.82, tts: 0.6 }, natural: { pitch: 1, tts: 1 }, tough: { pitch: 0.72, tts: 0.35 }, chip: { pitch: 1.45, tts: 1.8 } };
+var voiceMode = "tts", fxMode = "rap", ttsTimers = [], ttsVoice = null;
+/* Styles de voix : hauteur, filtres, saturation, vibrato, chorus, écho, réverbération */
+var FX = {
+  rap:     { label: "Rappeur", pitch: 0.84, tts: 0.6, hp: 100, echo: { t: 0.5, fb: 0.2, wet: 0.14 } },
+  opera:   { label: "Chanteur d'opéra", pitch: 1.0, tts: 1.3, hp: 130, peak: { f: 2800, g: 5 }, vib: { rate: 5.6, depth: 0.0024 }, rev: { dur: 3.2, wet: 0.5 } },
+  rock:    { label: "Rock", pitch: 0.95, tts: 0.8, hp: 150, drive: 3, peak: { f: 1500, g: 5 }, rev: { dur: 1.2, wet: 0.2 }, echo: { t: 0.25, fb: 0.15, wet: 0.1 } },
+  pop:     { label: "Pop", pitch: 1.06, tts: 1.2, hp: 120, shelf: 5, chorus: true, rev: { dur: 1.8, wet: 0.28 }, echo: { t: 0.5, fb: 0.25, wet: 0.12 } },
+  hard:    { label: "Hard rock", pitch: 0.9, tts: 0.5, hp: 180, lp: 6500, drive: 8, peak: { f: 1200, g: 7 }, rev: { dur: 1.0, wet: 0.18 } },
+  punk:    { label: "Punk", pitch: 1.08, tts: 1.4, hp: 450, lp: 3800, drive: 5, echo: { t: 0.09, fb: 0.05, wet: 0.3, abs: true } },
+  reggae:  { label: "Reggae", pitch: 1.0, tts: 1.0, hp: 200, lp: 5000, echo: { t: 0.75, fb: 0.5, wet: 0.35, dub: true }, rev: { dur: 1.5, wet: 0.2 } },
+  tough:   { label: "Gros dur", pitch: 0.72, tts: 0.35, hp: 90, drive: 2.5 },
+  natural: { label: "Naturelle", pitch: 1, tts: 1, hp: 90 },
+  chip:    { label: "Petite voix", pitch: 1.45, tts: 1.8, hp: 150 }
+};
+function curFx(){ return FX[fxMode] || FX.rap; }
+function makeImpulse(ctx, dur){
+  var sr = ctx.sampleRate, n = Math.floor(sr * dur), b = ctx.createBuffer(2, n, sr);
+  for (var c = 0; c < 2; c++) { var d = b.getChannelData(c); for (var i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3); }
+  return b;
+}
+function voiceChain(ctx, out){
+  var F = curFx(), input = ctx.createGain(), node = input, oscs = [];
+  function add(n){ node.connect(n); node = n; }
+  function bq(type, f, g, q){ var b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; if (g) b.gain.value = g; if (q) b.Q.value = q; return b; }
+  add(bq("highpass", F.hp || 90));
+  if (F.lp) add(bq("lowpass", F.lp));
+  if (F.vib) {
+    var vd = ctx.createDelay(0.05); vd.delayTime.value = 0.006;
+    var lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.frequency.value = F.vib.rate; lg.gain.value = F.vib.depth;
+    lfo.connect(lg); lg.connect(vd.delayTime); lfo.start(0); oscs.push(lfo); add(vd);
+  }
+  var comp = ctx.createDynamicsCompressor(); comp.threshold.value = -26; comp.ratio.value = 4; comp.attack.value = 0.005; comp.release.value = 0.15; add(comp);
+  if (F.drive) {
+    var ws = ctx.createWaveShaper(), cvv = new Float32Array(1024);
+    for (var q = 0; q < 1024; q++) { var xx = q / 511.5 - 1; cvv[q] = Math.tanh(F.drive * xx) / Math.tanh(F.drive); }
+    ws.curve = cvv; add(ws);
+    var pg = ctx.createGain(); pg.gain.value = 0.75; add(pg);
+  }
+  if (F.peak) add(bq("peaking", F.peak.f, F.peak.g, 1));
+  if (F.shelf) add(bq("highshelf", 3500, F.shelf));
+  var dry = ctx.createGain(); dry.gain.value = 1.6; add(dry); dry.connect(out);
+  if (F.chorus) {
+    var cd = ctx.createDelay(0.1); cd.delayTime.value = 0.025;
+    var l2 = ctx.createOscillator(), l2g = ctx.createGain(), cg = ctx.createGain();
+    l2.frequency.value = 0.8; l2g.gain.value = 0.004; cg.gain.value = 0.5;
+    l2.connect(l2g); l2g.connect(cd.delayTime); l2.start(0); oscs.push(l2);
+    dry.connect(cd); cd.connect(cg); cg.connect(out);
+  }
+  if (F.echo) {
+    var E = F.echo, dl = ctx.createDelay(3), fb = ctx.createGain(), wet = ctx.createGain();
+    dl.delayTime.value = E.abs ? E.t : beatLen() * E.t; fb.gain.value = E.fb; wet.gain.value = E.wet;
+    if (E.dub) { var df = bq("lowpass", 1800); dl.connect(df); df.connect(fb); } else dl.connect(fb);
+    fb.connect(dl); dry.connect(dl); dl.connect(wet); wet.connect(out);
+  }
+  if (F.rev) {
+    var cvl = ctx.createConvolver(), rg = ctx.createGain(); cvl.buffer = makeImpulse(ctx, F.rev.dur); rg.gain.value = F.rev.wet;
+    dry.connect(cvl); cvl.connect(rg); rg.connect(out);
+  }
+  return { input: input, oscs: oscs };
+}
 var hasTTS = !!(window.speechSynthesis && window.SpeechSynthesisUtterance);
 function pickVoice(){
   if (!hasTTS) return null;
@@ -966,7 +1023,7 @@ function ttsSchedule(){
       try {
         var u = new SpeechSynthesisUtterance(txt);
         u.lang = "fr-FR"; if (ttsVoice) u.voice = ttsVoice;
-        u.rate = rate; u.pitch = (FX[fxMode] || FX.grave).tts; u.volume = 1;
+        u.rate = rate; u.pitch = curFx().tts; u.volume = 1;
         speechSynthesis.speak(u);
       } catch (e) {}
     }, Math.max(0, delay)));
@@ -1042,7 +1099,7 @@ function fitClip(i){
   var key = singText(l) + "|" + fxMode + "|" + sl.dur.toFixed(3) + "|" + c.v;
   if (fitCache[key]) return fitCache[key];
   var r = clamp(sl.dur / (c.data.length / c.sr), 0.55, 1.7);
-  var out = { data: fitAudio(c.data, r, (FX[fxMode] || FX.grave).pitch), sr: c.sr };
+  var out = { data: fitAudio(c.data, r, curFx().pitch), sr: c.sr };
   fitCache[key] = out;
   return out;
 }
@@ -1058,18 +1115,7 @@ function renderSong(withVocal){
       bus.connect(comp); comp.connect(off.destination);
       scheduleBeat(0, bus);
       if (withVocal) {
-        var hp = filt("highpass", 90), vc = off.createDynamicsCompressor(), vg = off.createGain();
-        vc.threshold.value = -26; vc.ratio.value = 4; vc.attack.value = 0.005; vc.release.value = 0.15; vg.gain.value = 1.6;
-        hp.connect(vc);
-        if (fxMode === "tough") {
-          var sh = off.createWaveShaper(), cv2 = new Float32Array(1024);
-          for (var q = 0; q < 1024; q++) { var xx = q / 511.5 - 1; cv2[q] = Math.tanh(2.5 * xx) / Math.tanh(2.5); }
-          sh.curve = cv2; vc.connect(sh); sh.connect(vg);
-        } else vc.connect(vg);
-        vg.connect(bus);
-        var dl = off.createDelay(1), fb = off.createGain(), dg = off.createGain();
-        dl.delayTime.value = beatLen() / 2; fb.gain.value = 0.22; dg.gain.value = 0.13;
-        vg.connect(dl); dl.connect(fb); fb.connect(dl); dl.connect(dg); dg.connect(bus);
+        var hp = voiceChain(off, bus).input;
         lines.forEach(function(l, i){
           var fc = fitClip(i), sl = slotOf(i);
           if (!fc || !sl || !fc.data.length) return;
@@ -1255,10 +1301,35 @@ $("vsPlay").addEventListener("click", function(){
   var fc = fitClip(VS.list[VS.idx]);
   if (!fc) return;
   ensureAudio(); if (actx.resume) actx.resume();
-  var b = actx.createBuffer(1, fc.data.length, fc.sr); b.getChannelData(0).set(fc.data);
-  var s = actx.createBufferSource(); s.buffer = b; s.connect(master); s.start();
+  playClipFx(fc);
 });
-$("vsFx").addEventListener("change", function(){ fxMode = $("vsFx").value; sset("fd.fx", fxMode); mixDirty = true; });
+function playClipFx(fc){
+  ensureAudio(); if (actx.resume) actx.resume();
+  var b = actx.createBuffer(1, fc.data.length, fc.sr); b.getChannelData(0).set(fc.data);
+  var s = actx.createBufferSource(), ch = voiceChain(actx, master), end = actx.currentTime + fc.data.length / fc.sr + 4;
+  s.buffer = b; s.connect(ch.input); s.start();
+  ch.oscs.forEach(function(o){ o.stop(end); });
+  setTimeout(function(){ try { ch.input.disconnect(); } catch (e) {} }, (end - actx.currentTime) * 1000 + 200);
+}
+function setFx(v){
+  if (!FX[v]) return;
+  fxMode = v; sset("fd.fx", v); mixDirty = true;
+  $("vsFx").value = v; $("fxMain").value = v;
+  if (source === "gen" && voiceMode === "mine" && fileKey === "mix") srcLine.textContent = "Style « " + FX[v].label + " » choisi : touche Lancer pour l'entendre.";
+}
+function tryFx(){
+  var idx = -1;
+  for (var i = 0; i < lines.length; i++) { if (clips[singText(lines[i])]) { idx = i; break; } }
+  if (idx < 0) return;
+  demoTimes();
+  var fc = fitClip(idx); if (fc) playClipFx(fc);
+}
+["vsFx", "fxMain"].forEach(function(id){
+  var sel = $(id);
+  Object.keys(FX).forEach(function(k){ var o = document.createElement("option"); o.value = k; o.textContent = FX[k].label; sel.appendChild(o); });
+  sel.addEventListener("change", function(){ setFx(sel.value); if (id === "vsFx" && clips[singText(lines[VS.list[VS.idx]] || { words: [] })]) $("vsPlay").click(); });
+});
+$("fxTry").addEventListener("click", tryFx);
 $("vsClose").addEventListener("click", vsClose);
 $("vsDone").addEventListener("click", function(){
   vsClose();
@@ -1467,6 +1538,8 @@ function updateUI(){
   syncBtn.disabled = syncing; playBtn.disabled = syncing; restartBtn.disabled = syncing;
   recBtn.hidden = !canRecord;
   micBtn.disabled = syncing || !!rec || mixing;
+  $("fxTry").disabled = !hasClips();
+  $("fxTry").title = hasClips() ? "" : "Enregistre d'abord au moins une ligne avec « Mettre ma voix »";
   playBtn.disabled = syncing || mixing; restartBtn.disabled = syncing || mixing; wavBtn.disabled = mixing;
   recBtn.textContent = rec ? "■ Arrêter l'enregistrement" : "● Enregistrer la vidéo";
   recBtn.disabled = syncing;
@@ -1985,8 +2058,8 @@ var si = parseFloat(sget("fd.int") || ""); if (isFinite(si)) { intensity = clamp
 var so = parseFloat(sget("fd.soft") || ""); if (isFinite(so)) { softness = clamp(so, 0, 1); softnessIn.value = softness; }
 var sv = sget("fd.voice"); if (sv === "tts" || sv === "none" || sv === "mine") voiceMode = sv;
 if (voiceMode === "tts" && !hasTTS) voiceMode = "none";
-var sf = sget("fd.fx"); if (FX[sf]) fxMode = sf;
-$("vsFx").value = fxMode;
+var sf = sget("fd.fx"); if (sf === "grave") sf = "rap"; if (FX[sf]) fxMode = sf;
+$("vsFx").value = fxMode; $("fxMain").value = fxMode;
 lines = parseLyrics(lyr.value); applyTimes(); updateUI();
 if (document.fonts && document.fonts.load) { try { document.fonts.load("400 40px Bungee"); document.fonts.load("700 20px \"Atkinson Hyperlegible\""); } catch (e) {} }
 dbOpen().then(function(){
