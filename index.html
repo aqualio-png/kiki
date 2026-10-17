@@ -599,14 +599,18 @@ function makeRig(an, img){
     R.rCurl = angDiff(Math.atan2(rp[1] - pv.rEl[1], rp[0] - pv.rEl[0]), Math.atan2(R.headC[1] - pv.rEl[1], R.headC[0] - pv.rEl[0])) >= 0 ? 1 : -1;
     R.rLift = (pv.rEl[0] - pv.rSh[0]) < 0 ? 1 : -1;
   }
-  R.plate = inpaintPlate(img, w, h, P);
-  if (R.has.chest) R.spr.chest = makeSprite(img, P.chest);
-  if (R.has.lArm) { R.spr.lUp = makeSprite(img, P.lUp); R.spr.lFo = makeSprite(img, P.lFo); }
-  if (R.has.rArm) { R.spr.rUp = makeSprite(img, P.rUp); R.spr.rFo = makeSprite(img, P.rFo); }
-  R.spr.head = makeSprite(img, P.head, P.jaw);
   R.lids = (an.eyes || []).map(function(e){ return sampleColor(img, w, h, e[0], e[1] - e[3] * 1.7); });
   R.hips = pv.hips || [R.headC[0], h * 0.75];
   R.neck = pv.neck || [R.headC[0], hb.y1];
+  var useGL = false;
+  try { useGL = buildGLRig(R); } catch (e) { useGL = false; }
+  R.plate = inpaintPlate(img, w, h, P);
+  if (!useGL) {
+    if (R.has.chest) R.spr.chest = makeSprite(img, P.chest);
+    if (R.has.lArm) { R.spr.lUp = makeSprite(img, P.lUp); R.spr.lFo = makeSprite(img, P.lFo); }
+    if (R.has.rArm) { R.spr.rUp = makeSprite(img, P.rUp); R.spr.rFo = makeSprite(img, P.rFo); }
+    R.spr.head = makeSprite(img, P.head, P.jaw);
+  }
   return R;
 }
 function loadRig(an){
@@ -618,6 +622,183 @@ function loadRig(an){
   });
 }
 
+/* ================= Déformation fluide (maillage WebGL, sans découpe) ================= */
+var GL = null;
+var VS_SRC = [
+  "attribute vec2 aPos; attribute vec2 aUV; attribute vec4 aW0; attribute vec4 aW1; attribute float aZ; attribute float aA;",
+  "uniform mat3 uM[8]; uniform vec2 uSize; varying vec2 vUV; varying float vA;",
+  "void main(){",
+  "  vec3 p = vec3(aPos, 1.0);",
+  "  vec2 q = aW0.x * (uM[0] * p).xy + aW0.y * (uM[1] * p).xy + aW0.z * (uM[2] * p).xy + aW0.w * (uM[3] * p).xy",
+  "         + aW1.x * (uM[4] * p).xy + aW1.y * (uM[5] * p).xy + aW1.z * (uM[6] * p).xy + aW1.w * (uM[7] * p).xy;",
+  "  vec2 c = q / uSize * 2.0 - 1.0;",
+  "  gl_Position = vec4(c.x, -c.y, 0.5 - aZ * 0.06, 1.0);",
+  "  vUV = aUV; vA = aA;",
+  "}"
+].join("\n");
+var FS_SRC = [
+  "precision mediump float; uniform sampler2D uTex; varying vec2 vUV; varying float vA;",
+  "void main(){ vec4 c = texture2D(uTex, vUV); gl_FragColor = vec4(c.rgb, c.a * vA); }"
+].join("\n");
+function glInit(){
+  if (GL !== null) return GL;
+  try {
+    var c = document.createElement("canvas");
+    var g = c.getContext("webgl", { premultipliedAlpha: true, alpha: true, antialias: true, depth: true, preserveDrawingBuffer: true }) || c.getContext("experimental-webgl");
+    if (!g) { GL = false; return GL; }
+    function sh(type, src){ var s = g.createShader(type); g.shaderSource(s, src); g.compileShader(s); if (!g.getShaderParameter(s, g.COMPILE_STATUS)) throw new Error(g.getShaderInfoLog(s)); return s; }
+    var pr = g.createProgram();
+    g.attachShader(pr, sh(g.VERTEX_SHADER, VS_SRC)); g.attachShader(pr, sh(g.FRAGMENT_SHADER, FS_SRC)); g.linkProgram(pr);
+    if (!g.getProgramParameter(pr, g.LINK_STATUS)) throw new Error("link");
+    GL = { c: c, g: g, pr: pr,
+      aPos: g.getAttribLocation(pr, "aPos"), aUV: g.getAttribLocation(pr, "aUV"), aW0: g.getAttribLocation(pr, "aW0"), aW1: g.getAttribLocation(pr, "aW1"), aZ: g.getAttribLocation(pr, "aZ"), aA: g.getAttribLocation(pr, "aA"),
+      uM: g.getUniformLocation(pr, "uM"), uSize: g.getUniformLocation(pr, "uSize"), uTex: g.getUniformLocation(pr, "uTex"), mats: new Float32Array(72) };
+  } catch (e) { GL = false; }
+  return GL;
+}
+function pip(poly, x, y){
+  var ins = false;
+  for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    var xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) ins = !ins;
+  }
+  return ins;
+}
+function segDist(poly, x, y){
+  var best = 1e18;
+  for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    var ax = poly[j][0], ay = poly[j][1], bx = poly[i][0], by = poly[i][1], dx = bx - ax, dy = by - ay, l = dx * dx + dy * dy;
+    var t = l ? clamp(((x - ax) * dx + (y - ay) * dy) / l, 0, 1) : 0, ex = ax + t * dx - x, ey = ay + t * dy - y, d = ex * ex + ey * ey;
+    if (d < best) best = d;
+  }
+  return Math.sqrt(best);
+}
+function member(poly, x, y, rad){
+  if (pip(poly, x, y)) return 1;
+  var d = segDist(poly, x, y);
+  if (d >= rad) return 0;
+  var t = d / rad; return 1 - t * t * (3 - 2 * t);
+}
+/* bones : 0 décor, 1 torse, 2 haut patte G, 3 bas patte G, 4 haut patte D, 5 bas patte D, 6 tête, 7 bouche */
+function buildGLRig(R){
+  var G = glInit(); if (!G) return false;
+  var g = G.g, P = R.an.parts, w = R.w, h = R.h, hb = bbox(P.head), hw = hb.x1 - hb.x0;
+  var layers = [ { k: "jaw", b: 7, z: 6, r: Math.max(4, hw * 0.012) }, { k: "head", b: 6, z: 5, r: hw * 0.17 } ];
+  if (R.has.lArm) layers.push({ k: "lFo", b: 3, z: 4, r: hw * 0.13 }, { k: "lUp", b: 2, z: 3, r: hw * 0.14 });
+  if (R.has.rArm) layers.push({ k: "rFo", b: 5, z: 4, r: hw * 0.13 }, { k: "rUp", b: 4, z: 3, r: hw * 0.14 });
+  if (R.has.chest) layers.push({ k: "chest", b: 1, z: 1, r: hw * 0.18 });
+  var nx = 110, ny = clamp(Math.round(nx * h / w), 60, 170), nv = (nx + 1) * (ny + 1);
+  var data = new Float32Array(nv * 14), ra = hw * 0.05, margin = 0.025 * Math.max(w, h), o = 0;
+  for (var j = 0; j <= ny; j++) for (var i = 0; i <= nx; i++) {
+    var x = i / nx * w, y = j / ny * h;
+    var eb = Math.min(x, y, w - x, h - y) / margin, ef = eb >= 1 ? 1 : (eb <= 0 ? 0 : eb * eb * (3 - 2 * eb));
+    var W = [0, 0, 0, 0, 0, 0, 0, 0], rem = 1, z = 0;
+    for (var L = 0; L < layers.length && rem > 1e-4; L++) {
+      var ly = layers[L], m = member(P[ly.k], x, y, ly.r) * ef;
+      if (m <= 0) continue;
+      var wt = m * rem; W[ly.b] += wt; z += wt * ly.z; rem -= wt;
+    }
+    W[0] += rem;
+    var al = 0;
+    for (L = 0; L < layers.length && al < 1; L++) al = Math.max(al, member(P[layers[L].k], x, y, ra));
+    data[o++] = x; data[o++] = y; data[o++] = x / w; data[o++] = y / h;
+    for (var k = 0; k < 8; k++) data[o++] = W[k];
+    data[o++] = z; data[o++] = al;
+  }
+  var idx = new Uint16Array(nx * ny * 6), q = 0;
+  for (j = 0; j < ny; j++) for (i = 0; i < nx; i++) {
+    var a = j * (nx + 1) + i, b2 = a + 1, c2 = a + nx + 1, d2 = c2 + 1;
+    idx[q++] = a; idx[q++] = b2; idx[q++] = c2; idx[q++] = b2; idx[q++] = d2; idx[q++] = c2;
+  }
+  var vbo = g.createBuffer(); g.bindBuffer(g.ARRAY_BUFFER, vbo); g.bufferData(g.ARRAY_BUFFER, data, g.STATIC_DRAW);
+  var ibo = g.createBuffer(); g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, ibo); g.bufferData(g.ELEMENT_ARRAY_BUFFER, idx, g.STATIC_DRAW);
+  var tex = g.createTexture(); g.bindTexture(g.TEXTURE_2D, tex);
+  g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL, false);
+  g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, R.img);
+  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR);
+  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE);
+  R.gl = { vbo: vbo, ibo: ibo, tex: tex, count: idx.length };
+  R.dispose = function(){ try { g.deleteBuffer(vbo); g.deleteBuffer(ibo); g.deleteTexture(tex); } catch (e) {} R.gl = null; };
+  /* lèvre supérieure : moitié haute du contour de la bouche, de gauche à droite */
+  var jp = P.jaw, li = 0, ri = 0;
+  jp.forEach(function(pt, k){ if (pt[0] < jp[li][0]) li = k; if (pt[0] > jp[ri][0]) ri = k; });
+  function chain(from, to){ var out = [], k = from; for (;;) { out.push(jp[k]); if (k === to) break; k = (k + 1) % jp.length; } return out; }
+  var c1 = chain(li, ri), c2b = chain(ri, li);
+  function avgY(ch){ var s = 0; ch.forEach(function(pt){ s += pt[1]; }); return s / ch.length; }
+  var top = avgY(c1) < avgY(c2b) ? c1 : c2b;
+  R.lip = top.slice().sort(function(m1, m2){ return m1[0] - m2[0]; });
+  return true;
+}
+function glRender(R, mats){
+  var G = GL, g = G.g, s = Math.min(1, 1000 / Math.max(R.w, R.h)), cw = Math.round(R.w * s), ch = Math.round(R.h * s);
+  if (G.c.width !== cw || G.c.height !== ch) { G.c.width = cw; G.c.height = ch; }
+  g.viewport(0, 0, cw, ch);
+  g.clearColor(0, 0, 0, 0); g.clearDepth(1); g.clear(g.COLOR_BUFFER_BIT | g.DEPTH_BUFFER_BIT);
+  g.enable(g.DEPTH_TEST); g.depthFunc(g.LEQUAL);
+  g.useProgram(G.pr);
+  g.bindBuffer(g.ARRAY_BUFFER, R.gl.vbo); g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, R.gl.ibo);
+  var st = 14 * 4;
+  g.enableVertexAttribArray(G.aPos); g.vertexAttribPointer(G.aPos, 2, g.FLOAT, false, st, 0);
+  g.enableVertexAttribArray(G.aUV); g.vertexAttribPointer(G.aUV, 2, g.FLOAT, false, st, 8);
+  g.enableVertexAttribArray(G.aW0); g.vertexAttribPointer(G.aW0, 4, g.FLOAT, false, st, 16);
+  g.enableVertexAttribArray(G.aW1); g.vertexAttribPointer(G.aW1, 4, g.FLOAT, false, st, 32);
+  g.enableVertexAttribArray(G.aZ); g.vertexAttribPointer(G.aZ, 1, g.FLOAT, false, st, 48);
+  g.enableVertexAttribArray(G.aA); g.vertexAttribPointer(G.aA, 1, g.FLOAT, false, st, 52);
+  g.enable(g.BLEND); g.blendFuncSeparate(g.SRC_ALPHA, g.ONE_MINUS_SRC_ALPHA, g.ONE, g.ONE_MINUS_SRC_ALPHA);
+  for (var i = 0; i < 8; i++) { var m = mats[i], b = i * 9; G.mats[b] = m[0]; G.mats[b+1] = m[1]; G.mats[b+2] = 0; G.mats[b+3] = m[2]; G.mats[b+4] = m[3]; G.mats[b+5] = 0; G.mats[b+6] = m[4]; G.mats[b+7] = m[5]; G.mats[b+8] = 1; }
+  g.uniformMatrix3fv(G.uM, false, G.mats);
+  g.uniform2f(G.uSize, R.w, R.h);
+  g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, R.gl.tex); g.uniform1i(G.uTex, 0);
+  g.drawElements(g.TRIANGLES, R.gl.count, g.UNSIGNED_SHORT, 0);
+  return G.c;
+}
+function amul(m, n){ return [m[0]*n[0] + m[2]*n[1], m[1]*n[0] + m[3]*n[1], m[0]*n[2] + m[2]*n[3], m[1]*n[2] + m[3]*n[3], m[0]*n[4] + m[2]*n[5] + m[4], m[1]*n[4] + m[3]*n[5] + m[5]]; }
+function aT(x, y){ return [1, 0, 0, 1, x, y]; }
+function aAbout(pv, deg, sx, sy){
+  var r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r), M = [c * sx, s * sx, -s * sy, c * sy, 0, 0];
+  M[4] = pv[0] - (M[0] * pv[0] + M[2] * pv[1]); M[5] = pv[1] - (M[1] * pv[0] + M[3] * pv[1]);
+  return M;
+}
+function aApply(m, p){ return [m[0] * p[0] + m[2] * p[1] + m[4], m[1] * p[0] + m[3] * p[1] + m[5]]; }
+function drawAnimalGL(c, R, p, dt){
+  var an = R.an, pv = an.piv, U = R.U, J = R.jaw, I = [1, 0, 0, 1, 0, 0], now = performance.now() / 1000;
+  var body = amul(aT(0, p.bodyY * U), aAbout(R.hips, p.lean, 1, 1));
+  var chest = amul(body, aAbout(R.hips, 0, p.chestS, p.chestS));
+  var lUp = I, lFo = I, rUp = I, rFo = I;
+  if (R.has.lArm) { lUp = amul(body, aAbout(pv.lSh, R.lLift * p.lLift, p.lPump, p.lPump)); lFo = amul(lUp, aAbout(pv.lEl, R.lCurl * p.lCurl, 1, 1)); }
+  if (R.has.rArm) { rUp = amul(body, aAbout(pv.rSh, R.rLift * p.rLift, p.rPump, p.rPump)); rFo = amul(rUp, aAbout(pv.rEl, R.rCurl * p.rCurl, 1, 1)); }
+  var head = amul(amul(body, aT(0, p.headY * U)), aAbout(R.neck, p.headRot, 1, p.headSy));
+  var jaw = amul(amul(head, aT(0, p.jaw * J.h * 0.3)), aAbout([J.cx, J.top], 0, 1, 1 + p.jaw * 0.12));
+  var out = glRender(R, [I, chest, lUp, lFo, rUp, rFo, head, jaw]);
+  if (R.plate) c.drawImage(R.plate, 0, 0, R.w, R.h); else c.drawImage(R.img, 0, 0, R.w, R.h);
+  c.drawImage(out, 0, 0, R.w, R.h);
+  if (p.jaw > 0.03 && R.lip && R.lip.length > 1) {
+    var x0 = R.lip[0][0], x1 = R.lip[R.lip.length - 1][0], up = [], lo = [];
+    R.lip.forEach(function(q){
+      var a = aApply(head, q), b = aApply(jaw, q), u = x1 > x0 ? (q[0] - x0) / (x1 - x0) : 0.5, k = 0.15 + 0.85 * Math.pow(Math.sin(Math.PI * u), 0.7);
+      up.push(a); lo.push([a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k]);
+    });
+    c.save(); c.beginPath();
+    c.moveTo(up[0][0], up[0][1]);
+    for (var i = 1; i < up.length; i++) c.lineTo(up[i][0], up[i][1]);
+    for (i = lo.length - 1; i >= 0; i--) c.lineTo(lo[i][0], lo[i][1]);
+    c.closePath(); c.fillStyle = "#1f050b"; c.fill(); c.clip();
+    var mid = lo[Math.floor(lo.length / 2)], gap = Math.max(1, mid[1] - up[Math.floor(up.length / 2)][1]);
+    c.fillStyle = "#c94a63"; c.beginPath(); c.ellipse(mid[0], mid[1] - gap * 0.15, J.w * 0.24, gap * 0.45, 0, 0, Math.PI * 2); c.fill();
+    c.restore();
+  }
+  if (now > R.blinkAt) { R.blinkV = 1; R.blinkAt = now + 2.5 + Math.random() * 3; }
+  var blink = R.blinkV > 0 ? Math.sin(Math.PI * (1 - R.blinkV)) : 0;
+  R.blinkV = Math.max(0, R.blinkV - dt / 0.16);
+  if (blink > 0.02 && an.eyes) {
+    an.eyes.forEach(function(e, k){
+      var ce = aApply(head, [e[0], e[1] - e[3] * (1 - blink) * 0.5]);
+      c.fillStyle = R.lids[k] || "#151515";
+      c.beginPath(); c.ellipse(ce[0], ce[1], e[2], e[3] * blink + 1, p.headRot * Math.PI / 180, 0, Math.PI * 2); c.fill();
+    });
+  }
+}
+
 /* ================= Dessin de l'animal ================= */
 function about(c, pv, deg, sx, sy){
   c.translate(pv[0], pv[1]);
@@ -627,6 +808,7 @@ function about(c, pv, deg, sx, sy){
 }
 function drawSpr(c, s){ if (s) c.drawImage(s.c, s.x, s.y); }
 function drawAnimal(c, R, p, dt){
+  if (R.gl && GL) { drawAnimalGL(c, R, p, dt); return; }
   var an = R.an, pv = an.piv, U = R.U, now = performance.now() / 1000;
   if (now > R.blinkAt) { R.blinkV = 1; R.blinkAt = now + 2.5 + Math.random() * 3; }
   var blink = R.blinkV > 0 ? Math.sin(Math.PI * (1 - R.blinkV)) : 0;
@@ -1732,7 +1914,7 @@ function selectAnimal(id){
   $("deleteBtn").textContent = an.id === "kiki" ? "Rétablir KIKI d'origine" : "Supprimer";
   $("deleteBtn").disabled = an === KIKI;
   rig = null;
-  return loadRig(an).then(function(R){ if (curAnimal === an) { rig = R; spr = spState(); } }).catch(function(){ srcLine.textContent = "La photo de cet animal n'a pas pu être chargée."; });
+  return loadRig(an).then(function(R){ if (curAnimal === an) { if (rig && rig.dispose && rig !== R) rig.dispose(); rig = R; spr = spState(); } else if (R.dispose) R.dispose(); }).catch(function(){ srcLine.textContent = "La photo de cet animal n'a pas pu être chargée."; });
 }
 animalSel.addEventListener("change", function(){ selectAnimal(animalSel.value); });
 $("deleteBtn").addEventListener("click", function(){
@@ -1809,7 +1991,8 @@ function edShow(){
   ED.open = true; $("ed").hidden = false; document.body.style.overflow = "hidden";
   if (playing) pause();
 }
-function edClose(){ ED.open = false; ED.preview = false; ED.rig = null; $("ed").hidden = true; document.body.style.overflow = ""; }
+function edDropRig(){ if (ED.rig && ED.rig.dispose) ED.rig.dispose(); ED.rig = null; }
+function edClose(){ ED.open = false; ED.preview = false; edDropRig(); $("ed").hidden = true; document.body.style.overflow = ""; }
 function edLoadImg(an, cb){
   var im = new Image();
   im.onload = function(){
@@ -1851,7 +2034,7 @@ function edUpdateUI(){
       if (!ED.an.parts[k]) return;
       var b = document.createElement("button"); b.type = "button"; b.textContent = PART_LABEL[k];
       b.setAttribute("aria-pressed", ED.sel === k ? "true" : "false");
-      b.addEventListener("click", function(){ ED.sel = k; ED.preview = false; ED.rig = null; edUpdateUI(); });
+      b.addEventListener("click", function(){ ED.sel = k; ED.preview = false; edDropRig(); edUpdateUI(); });
       chips.appendChild(b);
     });
     $("edPrev").textContent = ED.preview ? "■ Revenir au découpage" : "▶ Aperçu animé";
@@ -1958,10 +2141,10 @@ $("edSkip").addEventListener("click", function(){
   if (!curStep()) { genFromPoints(ED.an, ED.pts); ED.mode = "adjust"; ED.sel = "head"; }
   edUpdateUI();
 });
-$("edRedo").addEventListener("click", function(){ ED.pts = {}; ED.step = 0; ED.skipped = {}; ED.mode = "place"; ED.preview = false; ED.rig = null; edUpdateUI(); });
+$("edRedo").addEventListener("click", function(){ ED.pts = {}; ED.step = 0; ED.skipped = {}; ED.mode = "place"; ED.preview = false; edDropRig(); edUpdateUI(); });
 $("edPrev").addEventListener("click", function(){
-  if (ED.preview) { ED.preview = false; ED.rig = null; edUpdateUI(); return; }
-  try { ED.rig = makeRig(ED.an, ED.img); ED.spr = spState(); ED.t0 = performance.now() / 1000; ED.preview = true; }
+  if (ED.preview) { ED.preview = false; edDropRig(); edUpdateUI(); return; }
+  try { edDropRig(); ED.rig = makeRig(ED.an, ED.img); ED.spr = spState(); ED.t0 = performance.now() / 1000; ED.preview = true; }
   catch (e) { edStep.textContent = "Aperçu impossible : vérifie que la tête et la bouche sont bien placées."; }
   edUpdateUI();
 });
