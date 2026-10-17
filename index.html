@@ -167,6 +167,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Atkinson Hype
         </div>
         <label>Intensité <input id="intensity" type="range" min="0.4" max="1.6" step="0.05" value="1"></label>
         <label>Souplesse <input id="softness" type="range" min="0" max="1" step="0.05" value="0.55"></label>
+        <label>Relief 3D <input id="relief" type="range" min="0" max="1.6" step="0.05" value="1"></label>
+        <label>Caméra 3D <input id="cam3d" type="range" min="0" max="1.5" step="0.05" value="0.7"></label>
         <p class="hint">Plus de souplesse = mouvements qui rebondissent et se prolongent. Moins = gestes secs et précis.</p>
       </div>
     </details>
@@ -206,6 +208,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Atkinson Hype
       <div class="row">
         <button id="edPrev" type="button">▶ Aperçu animé</button>
         <button id="edRedo" type="button">Replacer les points</button>
+        <button id="edDepth" type="button">✨ Relief IA</button>
       </div>
       <label>Nom <input id="edName" type="text" maxlength="24"></label>
       <label>Sous-titre <input id="edSub" type="text" maxlength="40"></label>
@@ -579,7 +582,7 @@ function sampleColor(img, w, h, x, y){
     return "rgb(" + Math.round(d[0] * 0.8) + "," + Math.round(d[1] * 0.8) + "," + Math.round(d[2] * 0.8) + ")";
   } catch (e) { return "#151515"; }
 }
-function makeRig(an, img){
+function makeRig(an, img, dimg){
   var P = an.parts, pv = an.piv, w = img.naturalWidth || an.w, h = img.naturalHeight || an.h;
   var R = { an: an, img: img, w: w, h: h, spr: {}, blinkAt: 2, blinkV: 0 };
   R.has = { chest: !!P.chest, lArm: !!(P.lUp && P.lFo && pv.lSh && pv.lEl), rArm: !!(P.rUp && P.rFo && pv.rSh && pv.rEl) };
@@ -603,8 +606,8 @@ function makeRig(an, img){
   R.hips = pv.hips || [R.headC[0], h * 0.75];
   R.neck = pv.neck || [R.headC[0], hb.y1];
   var useGL = false;
-  try { useGL = buildGLRig(R); } catch (e) { useGL = false; }
   R.plate = inpaintPlate(img, w, h, P);
+  try { useGL = buildGLRig(R, dimg); } catch (e) { useGL = false; }
   if (!useGL) {
     if (R.has.chest) R.spr.chest = makeSprite(img, P.chest);
     if (R.has.lArm) { R.spr.lUp = makeSprite(img, P.lUp); R.spr.lFo = makeSprite(img, P.lFo); }
@@ -616,29 +619,36 @@ function makeRig(an, img){
 function loadRig(an){
   return new Promise(function(res, rej){
     var im = new Image();
-    im.onload = function(){ try { res(makeRig(an, im)); } catch (e) { rej(e); } };
+    im.onload = function(){
+      var go = function(di){ try { res(makeRig(an, im, di)); } catch (e) { rej(e); } };
+      if (!an.depth) { go(null); return; }
+      var dm = new Image(); dm.onload = function(){ go(dm); }; dm.onerror = function(){ go(null); }; dm.src = an.depth;
+    };
     im.onerror = function(){ rej(new Error("image")); };
     im.src = an.img;
   });
 }
 
-/* ================= Déformation fluide (maillage WebGL, sans découpe) ================= */
-var GL = null;
+/* ================= Animation 3D (relief + caméra, WebGL) =================
+   Principe inspiré des « photos 3D » et de la marionnette numérique :
+   la photo devient un relief (profondeur par partie du corps, ou estimée par IA),
+   le squelette fait tourner tête et corps en 3D, une caméra virtuelle bouge autour,
+   et le décor reconstitué est placé derrière sur un plan séparé. */
+var GL = null, cam3d = 0.7, relief = 1;
 var VS_SRC = [
-  "attribute vec2 aPos; attribute vec2 aUV; attribute vec4 aW0; attribute vec4 aW1; attribute float aZ; attribute float aA;",
-  "uniform mat3 uM[8]; uniform vec2 uSize; varying vec2 vUV; varying float vA;",
+  "attribute vec3 aPos; attribute vec2 aUV; attribute vec4 aW0; attribute vec4 aW1; attribute float aA;",
+  "uniform mat4 uB[8]; uniform mat4 uPV; varying vec2 vUV; varying float vA;",
   "void main(){",
-  "  vec3 p = vec3(aPos, 1.0);",
-  "  vec2 q = aW0.x * (uM[0] * p).xy + aW0.y * (uM[1] * p).xy + aW0.z * (uM[2] * p).xy + aW0.w * (uM[3] * p).xy",
-  "         + aW1.x * (uM[4] * p).xy + aW1.y * (uM[5] * p).xy + aW1.z * (uM[6] * p).xy + aW1.w * (uM[7] * p).xy;",
-  "  vec2 c = q / uSize * 2.0 - 1.0;",
-  "  gl_Position = vec4(c.x, -c.y, 0.5 - aZ * 0.06, 1.0);",
+  "  vec4 p = vec4(aPos, 1.0);",
+  "  vec4 q = aW0.x * (uB[0] * p) + aW0.y * (uB[1] * p) + aW0.z * (uB[2] * p) + aW0.w * (uB[3] * p)",
+  "         + aW1.x * (uB[4] * p) + aW1.y * (uB[5] * p) + aW1.z * (uB[6] * p) + aW1.w * (uB[7] * p);",
+  "  gl_Position = uPV * vec4(q.xyz, 1.0);",
   "  vUV = aUV; vA = aA;",
   "}"
 ].join("\n");
 var FS_SRC = [
   "precision mediump float; uniform sampler2D uTex; varying vec2 vUV; varying float vA;",
-  "void main(){ vec4 c = texture2D(uTex, vUV); gl_FragColor = vec4(c.rgb, c.a * vA); }"
+  "void main(){ vec4 c = texture2D(uTex, vUV); float a = c.a * vA; if (a < 0.01) discard; gl_FragColor = vec4(c.rgb, a); }"
 ].join("\n");
 function glInit(){
   if (GL !== null) return GL;
@@ -651,8 +661,10 @@ function glInit(){
     g.attachShader(pr, sh(g.VERTEX_SHADER, VS_SRC)); g.attachShader(pr, sh(g.FRAGMENT_SHADER, FS_SRC)); g.linkProgram(pr);
     if (!g.getProgramParameter(pr, g.LINK_STATUS)) throw new Error("link");
     GL = { c: c, g: g, pr: pr,
-      aPos: g.getAttribLocation(pr, "aPos"), aUV: g.getAttribLocation(pr, "aUV"), aW0: g.getAttribLocation(pr, "aW0"), aW1: g.getAttribLocation(pr, "aW1"), aZ: g.getAttribLocation(pr, "aZ"), aA: g.getAttribLocation(pr, "aA"),
-      uM: g.getUniformLocation(pr, "uM"), uSize: g.getUniformLocation(pr, "uSize"), uTex: g.getUniformLocation(pr, "uTex"), mats: new Float32Array(72) };
+      aPos: g.getAttribLocation(pr, "aPos"), aUV: g.getAttribLocation(pr, "aUV"), aW0: g.getAttribLocation(pr, "aW0"), aW1: g.getAttribLocation(pr, "aW1"), aA: g.getAttribLocation(pr, "aA"),
+      uB: g.getUniformLocation(pr, "uB"), uPV: g.getUniformLocation(pr, "uPV"), uTex: g.getUniformLocation(pr, "uTex"),
+      bones: new Float32Array(128), ident: new Float32Array(128) };
+    for (var i = 0; i < 8; i++) { GL.ident[i * 16] = GL.ident[i * 16 + 5] = GL.ident[i * 16 + 10] = GL.ident[i * 16 + 15] = 1; }
   } catch (e) { GL = false; }
   return GL;
 }
@@ -679,103 +691,208 @@ function member(poly, x, y, rad){
   if (d >= rad) return 0;
   var t = d / rad; return 1 - t * t * (3 - 2 * t);
 }
+/* bosse arrondie : 0 au bord de la partie, maximum au centre */
+function dome(poly, x, y, r, hgt){
+  if (!pip(poly, x, y)) return 0;
+  var d = Math.min(1, segDist(poly, x, y) / r), u = 1 - d;
+  return hgt * Math.sqrt(Math.max(0, 1 - u * u));
+}
+/* ---- matrices 4x4 (colonnes) ---- */
+function m4(){ return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]; }
+function m4mul(a, b){
+  var o = new Array(16);
+  for (var c = 0; c < 4; c++) for (var r = 0; r < 4; r++) {
+    o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+  }
+  return o;
+}
+function m4T(x, y, z){ var m = m4(); m[12] = x; m[13] = y; m[14] = z; return m; }
+function m4S(x, y, z){ var m = m4(); m[0] = x; m[5] = y; m[10] = z; return m; }
+function m4Rx(d){ var r = d * Math.PI / 180, c = Math.cos(r), s = Math.sin(r), m = m4(); m[5] = c; m[6] = s; m[9] = -s; m[10] = c; return m; }
+function m4Ry(d){ var r = d * Math.PI / 180, c = Math.cos(r), s = Math.sin(r), m = m4(); m[0] = c; m[2] = -s; m[8] = s; m[10] = c; return m; }
+function m4Rz(d){ var r = d * Math.PI / 180, c = Math.cos(r), s = Math.sin(r), m = m4(); m[0] = c; m[1] = s; m[4] = -s; m[5] = c; return m; }
+function m4About(p, inner){ return m4mul(m4T(p[0], p[1], p[2]), m4mul(inner, m4T(-p[0], -p[1], -p[2]))); }
+function m4Persp(fov, asp, n, f){
+  var t = 1 / Math.tan(fov * Math.PI / 360), m = [t / asp,0,0,0, 0,t,0,0, 0,0,(f + n) / (n - f),-1, 0,0,2 * f * n / (n - f),0];
+  return m;
+}
+function m4Apply(m, p){
+  var x = p[0], y = p[1], z = p[2];
+  return [m[0]*x + m[4]*y + m[8]*z + m[12], m[1]*x + m[5]*y + m[9]*z + m[13], m[2]*x + m[6]*y + m[10]*z + m[14], m[3]*x + m[7]*y + m[11]*z + m[15]];
+}
 /* bones : 0 décor, 1 torse, 2 haut patte G, 3 bas patte G, 4 haut patte D, 5 bas patte D, 6 tête, 7 bouche */
-function buildGLRig(R){
+function buildGLRig(R, dimg){
   var G = glInit(); if (!G) return false;
   var g = G.g, P = R.an.parts, w = R.w, h = R.h, hb = bbox(P.head), hw = hb.x1 - hb.x0;
-  var layers = [ { k: "jaw", b: 7, z: 6, r: Math.max(4, hw * 0.012) }, { k: "head", b: 6, z: 5, r: hw * 0.17 } ];
-  if (R.has.lArm) layers.push({ k: "lFo", b: 3, z: 4, r: hw * 0.13 }, { k: "lUp", b: 2, z: 3, r: hw * 0.14 });
-  if (R.has.rArm) layers.push({ k: "rFo", b: 5, z: 4, r: hw * 0.13 }, { k: "rUp", b: 4, z: 3, r: hw * 0.14 });
-  if (R.has.chest) layers.push({ k: "chest", b: 1, z: 1, r: hw * 0.18 });
+  var layers = [ { k: "jaw", b: 7, r: Math.max(4, hw * 0.012) }, { k: "head", b: 6, r: hw * 0.17 } ];
+  if (R.has.lArm) layers.push({ k: "lFo", b: 3, r: hw * 0.13 }, { k: "lUp", b: 2, r: hw * 0.14 });
+  if (R.has.rArm) layers.push({ k: "rFo", b: 5, r: hw * 0.13 }, { k: "rUp", b: 4, r: hw * 0.14 });
+  if (R.has.chest) layers.push({ k: "chest", b: 1, r: hw * 0.18 });
+  /* bosses : rayon = demi-largeur de la partie */
+  var domes = [];
+  function addDome(k, f){ if (!P[k]) return; var b = bbox(P[k]), r = Math.min(b.x1 - b.x0, b.y1 - b.y0) / 2; domes.push({ p: P[k], r: r, h: r * f }); }
+  addDome("head", 0.55); addDome("chest", 0.35);
+  if (R.has.lArm) { addDome("lUp", 0.6); addDome("lFo", 0.6); }
+  if (R.has.rArm) { addDome("rUp", 0.6); addDome("rFo", 0.6); }
+  /* profondeur IA facultative */
+  var dd = null, dw = 0, dh = 0;
+  if (dimg) {
+    try { dw = dimg.naturalWidth; dh = dimg.naturalHeight; var dc = mk(dw, dh), dx = dc.getContext("2d"); dx.drawImage(dimg, 0, 0); dd = dx.getImageData(0, 0, dw, dh).data; } catch (e) { dd = null; }
+  }
   var nx = 110, ny = clamp(Math.round(nx * h / w), 60, 170), nv = (nx + 1) * (ny + 1);
-  var data = new Float32Array(nv * 14), ra = hw * 0.05, margin = 0.025 * Math.max(w, h), o = 0;
-  for (var j = 0; j <= ny; j++) for (var i = 0; i <= nx; i++) {
-    var x = i / nx * w, y = j / ny * h;
+  var ra = hw * 0.14, margin = 0.025 * Math.max(w, h), RZ = [], o = 0;
+  var data = new Float32Array(nv * 14), alphas = new Float32Array(nv), mlv = dd ? new Float32Array(nv) : null;
+  var i, j, L, k;
+  for (j = 0; j <= ny; j++) for (i = 0; i <= nx; i++) {
+    var x = i / nx * w, y = j / ny * h, vi = j * (nx + 1) + i;
     var eb = Math.min(x, y, w - x, h - y) / margin, ef = eb >= 1 ? 1 : (eb <= 0 ? 0 : eb * eb * (3 - 2 * eb));
-    var W = [0, 0, 0, 0, 0, 0, 0, 0], rem = 1, z = 0;
-    for (var L = 0; L < layers.length && rem > 1e-4; L++) {
+    var W = [0, 0, 0, 0, 0, 0, 0, 0], rem = 1;
+    for (L = 0; L < layers.length && rem > 1e-4; L++) {
       var ly = layers[L], m = member(P[ly.k], x, y, ly.r) * ef;
       if (m <= 0) continue;
-      var wt = m * rem; W[ly.b] += wt; z += wt * ly.z; rem -= wt;
+      var wt = m * rem; W[ly.b] += wt; rem -= wt;
     }
     W[0] += rem;
     var al = 0;
     for (L = 0; L < layers.length && al < 1; L++) al = Math.max(al, member(P[layers[L].k], x, y, ra));
-    data[o++] = x; data[o++] = y; data[o++] = x / w; data[o++] = y / h;
-    for (var k = 0; k < 8; k++) data[o++] = W[k];
-    data[o++] = z; data[o++] = al;
+    alphas[vi] = al;
+    var z = 0;
+    for (k = 0; k < domes.length; k++) z = Math.max(z, dome(domes[k].p, x, y, domes[k].r, domes[k].h));
+    RZ.push(z);
+    if (dd) { var px = clamp(Math.round(x / w * (dw - 1)), 0, dw - 1), py = clamp(Math.round(y / h * (dh - 1)), 0, dh - 1); mlv[vi] = dd[(py * dw + px) * 4]; }
+    data[o++] = x; data[o++] = y; data[o++] = 0; data[o++] = x / w; data[o++] = y / h;
+    for (k = 0; k < 8; k++) data[o++] = W[k];
+    data[o++] = al;
   }
+  /* mélange avec la profondeur IA : normalisée entre le décor et le point le plus proche */
+  if (mlv) {
+    var bg = [], fg = [];
+    for (i = 0; i < nv; i++) (alphas[i] < 0.05 ? bg : fg).push(mlv[i]);
+    bg.sort(function(a, b){ return a - b; }); fg.sort(function(a, b){ return a - b; });
+    var base = bg.length ? bg[Math.floor(bg.length * 0.8)] : 0, top = fg.length ? fg[Math.floor(fg.length * 0.98)] : 255, span = Math.max(8, top - base), hmax = hw * 0.55;
+    for (i = 0; i < nv; i++) { var mz = clamp((mlv[i] - base) / span, 0, 1) * hmax * alphas[i]; RZ[i] = RZ[i] * 0.35 + mz * 0.65; }
+  }
+  R.depthAt = function(px2, py2){
+    var ii = clamp(Math.round(px2 / w * nx), 0, nx), jj = clamp(Math.round(py2 / h * ny), 0, ny);
+    return RZ[jj * (nx + 1) + ii] || 0;
+  };
+  R.rz = RZ; R.nx = nx; R.ny = ny; R.vdata = data;
+  /* coordonnées monde : X vers la droite, Y vers le haut, Z vers la caméra */
+  for (i = 0; i < nv; i++) {
+    var b0 = i * 14;
+    data[b0] = data[b0] - w / 2; data[b0 + 1] = h / 2 - data[b0 + 1];
+  }
+  R.zScale = -1;
   var idx = new Uint16Array(nx * ny * 6), q = 0;
   for (j = 0; j < ny; j++) for (i = 0; i < nx; i++) {
     var a = j * (nx + 1) + i, b2 = a + 1, c2 = a + nx + 1, d2 = c2 + 1;
     idx[q++] = a; idx[q++] = b2; idx[q++] = c2; idx[q++] = b2; idx[q++] = d2; idx[q++] = c2;
   }
-  var vbo = g.createBuffer(); g.bindBuffer(g.ARRAY_BUFFER, vbo); g.bufferData(g.ARRAY_BUFFER, data, g.STATIC_DRAW);
-  var ibo = g.createBuffer(); g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, ibo); g.bufferData(g.ELEMENT_ARRAY_BUFFER, idx, g.STATIC_DRAW);
-  var tex = g.createTexture(); g.bindTexture(g.TEXTURE_2D, tex);
-  g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL, false);
-  g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, R.img);
-  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR);
-  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE);
-  R.gl = { vbo: vbo, ibo: ibo, tex: tex, count: idx.length };
-  R.dispose = function(){ try { g.deleteBuffer(vbo); g.deleteBuffer(ibo); g.deleteTexture(tex); } catch (e) {} R.gl = null; };
+  var vbo = g.createBuffer(), ibo = g.createBuffer();
+  g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, ibo); g.bufferData(g.ELEMENT_ARRAY_BUFFER, idx, g.STATIC_DRAW);
+  /* plan du décor, un peu plus grand que la photo pour couvrir les mouvements de caméra */
+  var E = 0.18, bgd = new Float32Array(4 * 14), corners = [[-E, -E], [1 + E, -E], [-E, 1 + E], [1 + E, 1 + E]];
+  corners.forEach(function(cn, n){
+    var b = n * 14; bgd[b] = cn[0] * w - w / 2; bgd[b + 1] = h / 2 - cn[1] * h; bgd[b + 2] = 0; bgd[b + 3] = cn[0]; bgd[b + 4] = cn[1];
+    bgd[b + 5] = 1; bgd[b + 13] = 1;
+  });
+  var bvbo = g.createBuffer(); g.bindBuffer(g.ARRAY_BUFFER, bvbo); g.bufferData(g.ARRAY_BUFFER, bgd, g.STATIC_DRAW);
+  function tex(src){
+    var t = g.createTexture(); g.bindTexture(g.TEXTURE_2D, t);
+    g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL, false);
+    g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, src);
+    g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR);
+    g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE);
+    return t;
+  }
+  R.gl = { vbo: vbo, ibo: ibo, bvbo: bvbo, tex: tex(R.img), btex: tex(R.plate || R.img), count: idx.length, relief: -1 };
+  R.dispose = function(){ try { g.deleteBuffer(vbo); g.deleteBuffer(ibo); g.deleteBuffer(bvbo); g.deleteTexture(R.gl.tex); g.deleteTexture(R.gl.btex); } catch (e) {} R.gl = null; };
+  glRelief(R);
   /* lèvre supérieure : moitié haute du contour de la bouche, de gauche à droite */
   var jp = P.jaw, li = 0, ri = 0;
-  jp.forEach(function(pt, k){ if (pt[0] < jp[li][0]) li = k; if (pt[0] > jp[ri][0]) ri = k; });
-  function chain(from, to){ var out = [], k = from; for (;;) { out.push(jp[k]); if (k === to) break; k = (k + 1) % jp.length; } return out; }
+  jp.forEach(function(pt, kk){ if (pt[0] < jp[li][0]) li = kk; if (pt[0] > jp[ri][0]) ri = kk; });
+  function chain(from, to){ var out = [], kk = from; for (;;) { out.push(jp[kk]); if (kk === to) break; kk = (kk + 1) % jp.length; } return out; }
   var c1 = chain(li, ri), c2b = chain(ri, li);
   function avgY(ch){ var s = 0; ch.forEach(function(pt){ s += pt[1]; }); return s / ch.length; }
-  var top = avgY(c1) < avgY(c2b) ? c1 : c2b;
-  R.lip = top.slice().sort(function(m1, m2){ return m1[0] - m2[0]; });
+  R.lip = (avgY(c1) < avgY(c2b) ? c1 : c2b).slice().sort(function(m1, m2){ return m1[0] - m2[0]; });
   return true;
 }
-function glRender(R, mats){
+/* applique le curseur « Relief » (profondeur) au maillage */
+function glRelief(R){
+  if (!R.gl || R.gl.relief === relief) return;
+  var g = GL.g, d = R.vdata;
+  for (var i = 0, n = R.rz.length; i < n; i++) d[i * 14 + 2] = R.rz[i] * relief;
+  g.bindBuffer(g.ARRAY_BUFFER, R.gl.vbo); g.bufferData(g.ARRAY_BUFFER, d, g.DYNAMIC_DRAW);
+  R.gl.relief = relief;
+}
+function toW(R, p, zf){ return [p[0] - R.w / 2, R.h / 2 - p[1], (R.depthAt(p[0], p[1]) * relief) * (zf === undefined ? 0.5 : zf)]; }
+function rigBones(R, p){
+  var an = R.an, pv = an.piv, U = R.U, J = R.jaw, I = m4();
+  var hips = toW(R, R.hips, 0.3), neck = toW(R, R.neck, 0.5);
+  var body = m4mul(m4T(0, -p.bodyY * U, 0), m4About(hips, m4mul(m4Ry(p.bodyYaw), m4Rz(-p.lean))));
+  var chest = m4mul(body, m4About(hips, m4S(p.chestS, p.chestS, p.chestS)));
+  var lUp = I, lFo = I, rUp = I, rFo = I;
+  if (R.has.lArm) { lUp = m4mul(body, m4About(toW(R, pv.lSh), m4mul(m4Rz(-R.lLift * p.lLift), m4S(p.lPump, p.lPump, p.lPump)))); lFo = m4mul(lUp, m4About(toW(R, pv.lEl), m4Rz(-R.lCurl * p.lCurl))); }
+  if (R.has.rArm) { rUp = m4mul(body, m4About(toW(R, pv.rSh), m4mul(m4Rz(-R.rLift * p.rLift), m4S(p.rPump, p.rPump, p.rPump)))); rFo = m4mul(rUp, m4About(toW(R, pv.rEl), m4Rz(-R.rCurl * p.rCurl))); }
+  var hrot = m4mul(m4Ry(p.headYaw), m4mul(m4Rx(p.headPitch), m4mul(m4Rz(-p.headRot), m4S(1, p.headSy, 1))));
+  var head = m4mul(m4mul(body, m4T(0, -p.headY * U, 0)), m4About(neck, hrot));
+  var jt = toW(R, [J.cx, J.top], 1);
+  var jaw = m4mul(m4mul(head, m4T(0, -p.jaw * J.h * 0.3, 0)), m4About(jt, m4S(1, 1 + p.jaw * 0.12, 1)));
+  return [I, chest, lUp, lFo, rUp, rFo, head, jaw];
+}
+function rigCamera(R, p){
+  var fov = 30, D = (R.h / 2) / Math.tan(fov * Math.PI / 360), zoom3 = 1 + 0.06 * cam3d;
+  var zRef = R.depthAt(R.headC[0], R.headC[1]) * relief * 0.7;
+  var view = m4mul(m4T(0, 0, -(D + zRef) / zoom3), m4mul(m4Rx(p.camPitch), m4Ry(p.camYaw)));
+  return m4mul(m4Persp(fov, R.w / R.h, D * 0.2, D * 4), view);
+}
+function glRender(R, bones, PV){
   var G = GL, g = G.g, s = Math.min(1, 1000 / Math.max(R.w, R.h)), cw = Math.round(R.w * s), ch = Math.round(R.h * s);
   if (G.c.width !== cw || G.c.height !== ch) { G.c.width = cw; G.c.height = ch; }
+  glRelief(R);
   g.viewport(0, 0, cw, ch);
   g.clearColor(0, 0, 0, 0); g.clearDepth(1); g.clear(g.COLOR_BUFFER_BIT | g.DEPTH_BUFFER_BIT);
   g.enable(g.DEPTH_TEST); g.depthFunc(g.LEQUAL);
-  g.useProgram(G.pr);
-  g.bindBuffer(g.ARRAY_BUFFER, R.gl.vbo); g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, R.gl.ibo);
-  var st = 14 * 4;
-  g.enableVertexAttribArray(G.aPos); g.vertexAttribPointer(G.aPos, 2, g.FLOAT, false, st, 0);
-  g.enableVertexAttribArray(G.aUV); g.vertexAttribPointer(G.aUV, 2, g.FLOAT, false, st, 8);
-  g.enableVertexAttribArray(G.aW0); g.vertexAttribPointer(G.aW0, 4, g.FLOAT, false, st, 16);
-  g.enableVertexAttribArray(G.aW1); g.vertexAttribPointer(G.aW1, 4, g.FLOAT, false, st, 32);
-  g.enableVertexAttribArray(G.aZ); g.vertexAttribPointer(G.aZ, 1, g.FLOAT, false, st, 48);
-  g.enableVertexAttribArray(G.aA); g.vertexAttribPointer(G.aA, 1, g.FLOAT, false, st, 52);
   g.enable(g.BLEND); g.blendFuncSeparate(g.SRC_ALPHA, g.ONE_MINUS_SRC_ALPHA, g.ONE, g.ONE_MINUS_SRC_ALPHA);
-  for (var i = 0; i < 8; i++) { var m = mats[i], b = i * 9; G.mats[b] = m[0]; G.mats[b+1] = m[1]; G.mats[b+2] = 0; G.mats[b+3] = m[2]; G.mats[b+4] = m[3]; G.mats[b+5] = 0; G.mats[b+6] = m[4]; G.mats[b+7] = m[5]; G.mats[b+8] = 1; }
-  g.uniformMatrix3fv(G.uM, false, G.mats);
-  g.uniform2f(G.uSize, R.w, R.h);
-  g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, R.gl.tex); g.uniform1i(G.uTex, 0);
+  g.useProgram(G.pr);
+  g.uniformMatrix4fv(G.uPV, false, new Float32Array(PV));
+  g.activeTexture(g.TEXTURE0); g.uniform1i(G.uTex, 0);
+  var st = 14 * 4;
+  function attribs(){
+    g.enableVertexAttribArray(G.aPos); g.vertexAttribPointer(G.aPos, 3, g.FLOAT, false, st, 0);
+    g.enableVertexAttribArray(G.aUV); g.vertexAttribPointer(G.aUV, 2, g.FLOAT, false, st, 12);
+    g.enableVertexAttribArray(G.aW0); g.vertexAttribPointer(G.aW0, 4, g.FLOAT, false, st, 20);
+    g.enableVertexAttribArray(G.aW1); g.vertexAttribPointer(G.aW1, 4, g.FLOAT, false, st, 36);
+    g.enableVertexAttribArray(G.aA); g.vertexAttribPointer(G.aA, 1, g.FLOAT, false, st, 52);
+  }
+  /* décor */
+  g.uniformMatrix4fv(G.uB, false, G.ident);
+  g.bindBuffer(g.ARRAY_BUFFER, R.gl.bvbo); attribs();
+  g.bindTexture(g.TEXTURE_2D, R.gl.btex);
+  g.disable(g.DEPTH_TEST); g.depthMask(false);
+  g.drawArrays(g.TRIANGLE_STRIP, 0, 4);
+  g.enable(g.DEPTH_TEST); g.depthMask(true);
+  /* animal */
+  for (var i = 0; i < 8; i++) { var m = bones[i]; for (var k = 0; k < 16; k++) G.bones[i * 16 + k] = m[k]; }
+  g.uniformMatrix4fv(G.uB, false, G.bones);
+  g.bindBuffer(g.ARRAY_BUFFER, R.gl.vbo); g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, R.gl.ibo); attribs();
+  g.bindTexture(g.TEXTURE_2D, R.gl.tex);
   g.drawElements(g.TRIANGLES, R.gl.count, g.UNSIGNED_SHORT, 0);
   return G.c;
 }
-function amul(m, n){ return [m[0]*n[0] + m[2]*n[1], m[1]*n[0] + m[3]*n[1], m[0]*n[2] + m[2]*n[3], m[1]*n[2] + m[3]*n[3], m[0]*n[4] + m[2]*n[5] + m[4], m[1]*n[4] + m[3]*n[5] + m[5]]; }
-function aT(x, y){ return [1, 0, 0, 1, x, y]; }
-function aAbout(pv, deg, sx, sy){
-  var r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r), M = [c * sx, s * sx, -s * sy, c * sy, 0, 0];
-  M[4] = pv[0] - (M[0] * pv[0] + M[2] * pv[1]); M[5] = pv[1] - (M[1] * pv[0] + M[3] * pv[1]);
-  return M;
+/* projette un point de la photo (avec son os) vers l'image rendue */
+function projectPt(R, M, PV, p, zf){
+  var wp = m4Apply(M, toW(R, p, zf)), c = m4Apply(PV, wp);
+  return [(c[0] / c[3] + 1) / 2 * R.w, (1 - c[1] / c[3]) / 2 * R.h];
 }
-function aApply(m, p){ return [m[0] * p[0] + m[2] * p[1] + m[4], m[1] * p[0] + m[3] * p[1] + m[5]]; }
 function drawAnimalGL(c, R, p, dt){
-  var an = R.an, pv = an.piv, U = R.U, J = R.jaw, I = [1, 0, 0, 1, 0, 0], now = performance.now() / 1000;
-  var body = amul(aT(0, p.bodyY * U), aAbout(R.hips, p.lean, 1, 1));
-  var chest = amul(body, aAbout(R.hips, 0, p.chestS, p.chestS));
-  var lUp = I, lFo = I, rUp = I, rFo = I;
-  if (R.has.lArm) { lUp = amul(body, aAbout(pv.lSh, R.lLift * p.lLift, p.lPump, p.lPump)); lFo = amul(lUp, aAbout(pv.lEl, R.lCurl * p.lCurl, 1, 1)); }
-  if (R.has.rArm) { rUp = amul(body, aAbout(pv.rSh, R.rLift * p.rLift, p.rPump, p.rPump)); rFo = amul(rUp, aAbout(pv.rEl, R.rCurl * p.rCurl, 1, 1)); }
-  var head = amul(amul(body, aT(0, p.headY * U)), aAbout(R.neck, p.headRot, 1, p.headSy));
-  var jaw = amul(amul(head, aT(0, p.jaw * J.h * 0.3)), aAbout([J.cx, J.top], 0, 1, 1 + p.jaw * 0.12));
-  var out = glRender(R, [I, chest, lUp, lFo, rUp, rFo, head, jaw]);
-  if (R.plate) c.drawImage(R.plate, 0, 0, R.w, R.h); else c.drawImage(R.img, 0, 0, R.w, R.h);
-  c.drawImage(out, 0, 0, R.w, R.h);
+  var an = R.an, J = R.jaw, now = performance.now() / 1000;
+  var bones = rigBones(R, p), PV = rigCamera(R, p), head = bones[6], jaw = bones[7];
+  c.drawImage(glRender(R, bones, PV), 0, 0, R.w, R.h);
   if (p.jaw > 0.03 && R.lip && R.lip.length > 1) {
     var x0 = R.lip[0][0], x1 = R.lip[R.lip.length - 1][0], up = [], lo = [];
     R.lip.forEach(function(q){
-      var a = aApply(head, q), b = aApply(jaw, q), u = x1 > x0 ? (q[0] - x0) / (x1 - x0) : 0.5, k = 0.15 + 0.85 * Math.pow(Math.sin(Math.PI * u), 0.7);
+      var a = projectPt(R, head, PV, q, 1), b = projectPt(R, jaw, PV, q, 1), u = x1 > x0 ? (q[0] - x0) / (x1 - x0) : 0.5, k = 0.15 + 0.85 * Math.pow(Math.sin(Math.PI * u), 0.7);
       up.push(a); lo.push([a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k]);
     });
     c.save(); c.beginPath();
@@ -791,12 +908,37 @@ function drawAnimalGL(c, R, p, dt){
   var blink = R.blinkV > 0 ? Math.sin(Math.PI * (1 - R.blinkV)) : 0;
   R.blinkV = Math.max(0, R.blinkV - dt / 0.16);
   if (blink > 0.02 && an.eyes) {
-    an.eyes.forEach(function(e, k){
-      var ce = aApply(head, [e[0], e[1] - e[3] * (1 - blink) * 0.5]);
-      c.fillStyle = R.lids[k] || "#151515";
+    an.eyes.forEach(function(e, kk){
+      var ce = projectPt(R, head, PV, [e[0], e[1] - e[3] * (1 - blink) * 0.5], 1);
+      c.fillStyle = R.lids[kk] || "#151515";
       c.beginPath(); c.ellipse(ce[0], ce[1], e[2], e[3] * blink + 1, p.headRot * Math.PI / 180, 0, Math.PI * 2); c.fill();
     });
   }
+}
+
+/* ---- Relief par IA (facultatif, modèle Depth Anything téléchargé une fois) ---- */
+var depthPipe = null;
+function aiDepth(dataUrl, onMsg){
+  onMsg("Chargement du modèle de profondeur (environ 25 Mo, une seule fois)…");
+  var lib = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2";
+  return import(lib).then(function(mod){
+    if (depthPipe) return depthPipe;
+    return mod.pipeline("depth-estimation", "Xenova/depth-anything-small-hf").then(function(p){ depthPipe = p; return p; });
+  }).then(function(pipe){
+    onMsg("Analyse du relief de la photo…");
+    return fetch(dataUrl).then(function(r){ return r.blob(); }).then(function(b){
+      var u = URL.createObjectURL(b);
+      return pipe(u).then(function(out){ URL.revokeObjectURL(u); return out; });
+    });
+  }).then(function(out){
+    var d = Array.isArray(out) ? out[0].depth : out.depth;
+    var c = mk(d.width, d.height), x = c.getContext("2d"), id = x.createImageData(d.width, d.height), ch = d.channels || 1;
+    for (var i = 0; i < d.width * d.height; i++) { var v = d.data[i * ch]; id.data[i*4] = id.data[i*4+1] = id.data[i*4+2] = v; id.data[i*4+3] = 255; }
+    x.putImageData(id, 0, 0);
+    var s = Math.min(1, 384 / Math.max(d.width, d.height)), c2 = mk(Math.round(d.width * s), Math.round(d.height * s));
+    c2.getContext("2d").drawImage(c, 0, 0, c2.width, c2.height);
+    return c2.toDataURL("image/png");
+  });
 }
 
 /* ================= Dessin de l'animal ================= */
@@ -849,9 +991,9 @@ function drawAnimal(c, R, p, dt){
 }
 
 /* ================= Gestuelles (ressorts) ================= */
-var NEUTRAL = { lean:0, bodyY:0, chestS:1, headRot:0, headY:0, headSy:1, lCurl:0, rCurl:0, lLift:0, rLift:0, lPump:1, rPump:1, zoom:1.03 };
+var NEUTRAL = { lean:0, bodyY:0, chestS:1, headRot:0, headY:0, headSy:1, lCurl:0, rCurl:0, lLift:0, rLift:0, lPump:1, rPump:1, zoom:1.03, headYaw:0, headPitch:0, bodyYaw:0, camYaw:0, camPitch:0 };
 var SKEYS = Object.keys(NEUTRAL);
-var SPRING_F = { lean:2.6, bodyY:4.2, chestS:3.8, headRot:3.0, headY:3.4, headSy:4.0, lCurl:4.2, rCurl:4.2, lLift:3.6, rLift:3.6, lPump:4.2, rPump:4.2, zoom:3.0 };
+var SPRING_F = { lean:2.6, bodyY:4.2, chestS:3.8, headRot:3.0, headY:3.4, headSy:4.0, lCurl:4.2, rCurl:4.2, lLift:3.6, rLift:3.6, lPump:4.2, rPump:4.2, zoom:3.0, headYaw:2.8, headPitch:3.2, bodyYaw:2.2, camYaw:1.2, camPitch:1.4 };
 function w01(x){ return 0.5 + 0.5 * Math.sin(2 * Math.PI * x); }
 function ss(a){ return a * a * (3 - 2 * a); }
 var MOVES = {
@@ -860,40 +1002,50 @@ var MOVES = {
     o.lCurl = 18 * a; o.rCurl = 18 * (1 - a); o.lPump = 1 + 0.09 * a; o.rPump = 1 + 0.09 * (1 - a);
     o.lLift = 3 * a; o.rLift = 3 * (1 - a);
     o.headRot = -5 * (2 * a - 1); o.lean = -2 * (2 * a - 1); o.bodyY = -10 * pk * pk; o.chestS = 1 + 0.03 * pk;
+    o.headYaw = -14 * (2 * a - 1); o.bodyYaw = -5 * (2 * a - 1);
   }},
   double: { label: "Double biceps", f: function(phi, pk, o){
     var c = Math.pow(pk, 1.5);
     o.lCurl = o.rCurl = 20 * c; o.lPump = o.rPump = 1 + 0.13 * c; o.lLift = o.rLift = 4 * c;
     o.chestS = 1 + 0.06 * pk; o.bodyY = -22 * pk * pk; o.headY = -8 * pk; o.headRot = 3 * Math.sin(Math.PI * phi);
-    o.zoom = 1.03 + 0.04 * pk * pk * pk;
+    o.zoom = 1.03 + 0.04 * pk * pk * pk; o.headYaw = 8 * Math.sin(Math.PI * phi / 2); o.bodyYaw = 4 * Math.sin(Math.PI * phi / 2); o.headPitch = -4 * pk;
   }},
   sway: { label: "Balancement", f: function(phi, pk, o){
     var s = Math.sin(Math.PI * phi);
     o.lean = 4.5 * s; o.headRot = -3.5 * Math.sin(Math.PI * phi - 0.7); o.bodyY = -6 * pk * pk;
     o.lCurl = 6 + 7 * s; o.rCurl = 6 - 7 * s; o.chestS = 1 + 0.015 * pk;
+    o.headYaw = 10 * Math.sin(Math.PI * phi - 0.7); o.bodyYaw = 7 * s;
   }},
   headbang: { label: "Headbang", f: function(phi, pk, o){
     var q = 0.5 + 0.5 * Math.cos(Math.PI * (phi - 1));
     o.headY = 16 * pk * pk; o.headRot = 4 * Math.sin(Math.PI * phi); o.headSy = 1 - 0.05 * pk * pk;
     o.bodyY = -6 * pk; o.lCurl = o.rCurl = 12 * q * q; o.lPump = o.rPump = 1 + 0.05 * q * q; o.lean = 1.5 * Math.sin(Math.PI * phi);
+    o.headPitch = 14 * pk * pk; o.headYaw = 4 * Math.sin(Math.PI * phi / 2);
   }},
   disco: { label: "Disco", f: function(phi, pk, o){
     var s = Math.sin(Math.PI * phi / 2), l = Math.max(0, s), r = Math.max(0, -s);
     o.lLift = 16 * l; o.rLift = 16 * r; o.lCurl = 10 * l; o.rCurl = 10 * r; o.lPump = 1 + 0.05 * l; o.rPump = 1 + 0.05 * r;
-    o.lean = 5 * s; o.headRot = 4 * s; o.bodyY = -8 * pk * pk;
+    o.lean = 5 * s; o.headRot = 4 * s; o.bodyY = -8 * pk * pk; o.headYaw = 12 * s; o.bodyYaw = 10 * s;
   }},
   wave: { label: "Vague", f: function(phi, pk, o){
     o.lCurl = 16 * w01(phi / 4); o.headRot = 6 * (2 * w01(phi / 4 - 0.125) - 1); o.rCurl = 16 * w01(phi / 4 - 0.25);
     o.lPump = 1 + 0.06 * w01(phi / 4); o.rPump = 1 + 0.06 * w01(phi / 4 - 0.25);
     o.lean = 3 * Math.sin(2 * Math.PI * (phi / 4 - 0.125)); o.bodyY = -7 * pk * pk; o.headY = -4 * w01(phi / 2);
+    o.headYaw = 14 * (2 * w01(phi / 4 - 0.125) - 1); o.bodyYaw = 6 * Math.sin(2 * Math.PI * (phi / 4 - 0.2));
+  }},
+  look: { label: "Regard 3D", f: function(phi, pk, o){
+    var s = Math.sin(Math.PI * phi / 2), e = s * Math.abs(s);
+    o.headYaw = 24 * e; o.headPitch = 6 * Math.sin(Math.PI * phi); o.bodyYaw = 9 * Math.sin(Math.PI * phi / 2 - 0.5);
+    o.bodyY = -8 * pk * pk; o.lCurl = 8 + 8 * Math.max(0, s); o.rCurl = 8 + 8 * Math.max(0, -s); o.chestS = 1 + 0.02 * pk;
   }},
   calm: { label: "Tranquille", f: function(phi, pk, o){
     var s = 0.5 + 0.5 * Math.sin(Math.PI * phi / 2);
     o.bodyY = -4 * s; o.chestS = 1 + 0.012 * s; o.headRot = 2 * Math.sin(Math.PI * phi / 4);
     o.lCurl = 3 * Math.sin(Math.PI * phi / 2); o.rCurl = 3 * Math.sin(Math.PI * phi / 2 + 1);
+    o.headYaw = 6 * Math.sin(Math.PI * phi / 4 + 0.5);
   }}
 };
-var moveFor = { intro: "sway", couplet: "flex", refrain: "double", outro: "disco" };
+var moveFor = { intro: "look", couplet: "flex", refrain: "double", outro: "disco" };
 var intensity = 1, softness = 0.55;
 
 function spState(){ var s = { x: {}, v: {} }; SKEYS.forEach(function(k){ s.x[k] = NEUTRAL[k]; s.v[k] = 0; }); s.jaw = 0; s.pop = 0; return s; }
@@ -922,6 +1074,12 @@ function targetPose(tA, tL, isPlaying, now){
   var raw = copyJSON(NEUTRAL);
   mv.f(phi, pk, raw);
   SKEYS.forEach(function(k){ o[k] = NEUTRAL[k] + (raw[k] - NEUTRAL[k]) * I; });
+  var sec = isPlaying ? st.section : "idle";
+  if (sec === "refrain" || sec === "outro") { o.camYaw = 5 * Math.sin(Math.PI * phi / 4); o.camPitch = 2 * pk * pk - 0.8; }
+  else if (sec === "couplet") { o.camYaw = 3 * Math.sin(Math.PI * phi / 4); o.camPitch = -1.5 + 1.5 * Math.sin(Math.PI * phi / 4 + 1); }
+  else if (sec === "intro") { o.camYaw = 5 * Math.sin(Math.PI * phi / 8); o.camPitch = 2 * Math.sin(Math.PI * phi / 8 + 1); }
+  else { o.camYaw = 3 * Math.sin(now * 0.35); o.camPitch = 1.2 * Math.sin(now * 0.27); }
+  o.camYaw *= cam3d; o.camPitch *= cam3d;
   if (isPlaying && (st.section === "refrain" || st.section === "outro") && ((bi % 4) + 4) % 4 === 0) o.flash = 0.14 * o.hit;
   if (st && st.syl) {
     var s = st.syl;
@@ -943,6 +1101,7 @@ function targetPose(tA, tL, isPlaying, now){
     o.lCurl = o.rCurl = 22; o.lPump = o.rPump = 1.14; o.lLift = o.rLift = 5; o.lean = 0;
     o.chestS = 1.05; o.bodyY = -8; o.headRot = -3; o.headY = -8; o.headSy = 1; o.jaw = 0;
     o.flash = Math.max(0, 1 - a * 3) * 0.6; o.pop = 1;
+    o.headYaw = 0; o.headPitch = -4; o.bodyYaw = 0; o.camYaw = 0; o.camPitch = -3 * cam3d;
   }
   if (reduced) { o.shake = 0; o.zoom = 1.03 + (o.zoom - 1.03) * 0.4; }
   return o;
@@ -1855,6 +2014,8 @@ Object.keys(mvSel).forEach(function(sec){
 });
 intensityIn.addEventListener("input", function(){ intensity = +intensityIn.value || 1; sset("fd.int", String(intensity)); });
 softnessIn.addEventListener("input", function(){ softness = +softnessIn.value; sset("fd.soft", String(softness)); });
+$("relief").addEventListener("input", function(){ relief = +$("relief").value; sset("fd.relief", String(relief)); });
+$("cam3d").addEventListener("input", function(){ cam3d = +$("cam3d").value; sset("fd.cam3d", String(cam3d)); });
 
 /* ================= Enregistrement vidéo ================= */
 var rec = null, recChunks = [], recMime = "";
@@ -1999,7 +2160,9 @@ function edLoadImg(an, cb){
     ED.img = im;
     ED.es = Math.min(1, 900 / Math.max(an.w, an.h));
     edCv.width = Math.round(an.w * ED.es); edCv.height = Math.round(an.h * ED.es);
-    cb();
+    ED.dimg = null;
+    if (!an.depth) { cb(); return; }
+    var dm = new Image(); dm.onload = function(){ ED.dimg = dm; cb(); }; dm.onerror = function(){ cb(); }; dm.src = an.depth;
   };
   im.src = an.img;
 }
@@ -2141,10 +2304,22 @@ $("edSkip").addEventListener("click", function(){
   if (!curStep()) { genFromPoints(ED.an, ED.pts); ED.mode = "adjust"; ED.sel = "head"; }
   edUpdateUI();
 });
+$("edDepth").addEventListener("click", function(){
+  var btn = $("edDepth"); btn.disabled = true;
+  aiDepth(ED.an.img, function(m){ edStep.textContent = m; }).then(function(url){
+    ED.an.depth = url;
+    var dm = new Image();
+    dm.onload = function(){ ED.dimg = dm; btn.disabled = false; edStep.textContent = "Relief IA prêt. Lance l'aperçu animé, puis enregistre l'animal."; if (ED.preview) { edDropRig(); ED.rig = makeRig(ED.an, ED.img, ED.dimg); } };
+    dm.src = url;
+  }).catch(function(){
+    btn.disabled = false;
+    edStep.textContent = "Le relief IA n'a pas pu être calculé (connexion ou appareil). Le relief automatique reste actif.";
+  });
+});
 $("edRedo").addEventListener("click", function(){ ED.pts = {}; ED.step = 0; ED.skipped = {}; ED.mode = "place"; ED.preview = false; edDropRig(); edUpdateUI(); });
 $("edPrev").addEventListener("click", function(){
   if (ED.preview) { ED.preview = false; edDropRig(); edUpdateUI(); return; }
-  try { edDropRig(); ED.rig = makeRig(ED.an, ED.img); ED.spr = spState(); ED.t0 = performance.now() / 1000; ED.preview = true; }
+  try { edDropRig(); ED.rig = makeRig(ED.an, ED.img, ED.dimg); ED.spr = spState(); ED.t0 = performance.now() / 1000; ED.preview = true; }
   catch (e) { edStep.textContent = "Aperçu impossible : vérifie que la tête et la bouche sont bien placées."; }
   edUpdateUI();
 });
@@ -2173,6 +2348,7 @@ function edFrame(dt){
     var raw = copyJSON(NEUTRAL), T = copyJSON(NEUTRAL);
     MOVES[mvk].f(phi, pk, raw);
     SKEYS.forEach(function(k){ T[k] = NEUTRAL[k] + (raw[k] - NEUTRAL[k]) * intensity; });
+    T.camYaw = 5 * cam3d * Math.sin(Math.PI * phi / 4); T.camPitch = 1.5 * cam3d * Math.sin(Math.PI * phi / 4 + 1);
     T.jaw = (bi % 2 === 0) ? Math.pow(Math.sin(Math.PI * Math.min(1, bf * 3)), 0.6) * 0.8 : 0; T.pop = 0;
     spStep(ED.spr, T, dt);
     var p = poseOut(ED.spr, { flash: 0, shake: 0, hit: 0 });
@@ -2239,6 +2415,8 @@ try { var mvs = JSON.parse(sget("fd.moves") || "null"); if (mvs) Object.keys(mov
 Object.keys(mvSel).forEach(function(k){ mvSel[k].value = moveFor[k]; });
 var si = parseFloat(sget("fd.int") || ""); if (isFinite(si)) { intensity = clamp(si, 0.4, 1.6); intensityIn.value = intensity; }
 var so = parseFloat(sget("fd.soft") || ""); if (isFinite(so)) { softness = clamp(so, 0, 1); softnessIn.value = softness; }
+var srl = parseFloat(sget("fd.relief") || ""); if (isFinite(srl)) { relief = clamp(srl, 0, 1.6); $("relief").value = relief; }
+var sc3 = parseFloat(sget("fd.cam3d") || ""); if (isFinite(sc3)) { cam3d = clamp(sc3, 0, 1.5); $("cam3d").value = cam3d; }
 var sv = sget("fd.voice"); if (sv === "tts" || sv === "none" || sv === "mine") voiceMode = sv;
 if (voiceMode === "tts" && !hasTTS) voiceMode = "none";
 var sf = sget("fd.fx"); if (sf === "grave") sf = "rap"; if (FX[sf]) fxMode = sf;
